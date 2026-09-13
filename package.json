@@ -1,0 +1,244 @@
+{
+    "name": "opentinker",
+    "displayName": "OpenTinker",
+    "description": "Tinkerwell-style scratchpad for Laravel: per-line results, SQL insight, persistent PsySH sessions.",
+    "version": "0.2.0",
+    "publisher": "open-tinker",
+    "license": "MIT",
+    "private": true,
+    "engines": {
+        "vscode": "^1.90.0",
+        "node": ">=20"
+    },
+    "categories": [
+        "Programming Languages",
+        "Other"
+    ],
+    "keywords": [
+        "laravel",
+        "tinker",
+        "psysh",
+        "repl",
+        "php",
+        "docker"
+    ],
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/Spicy-Brain/OpenTinker.git"
+    },
+    "main": "./dist/extension.js",
+    "activationEvents": [
+        "onLanguage:php",
+        "onView:opentinker.main",
+        "onCommand:opentinker.run",
+        "onCommand:opentinker.runSelection",
+        "onCommand:opentinker.runFile",
+        "onCommand:opentinker.newScratch",
+        "onCommand:opentinker.openScratch",
+        "onCommand:opentinker.selectConnection",
+        "onCommand:opentinker.restartSession",
+        "onCommand:opentinker.clearOutput",
+        "onCommand:opentinker.focusOutput"
+    ],
+    "contributes": {
+        "commands": [
+            {
+                "command": "opentinker.run",
+                "title": "OpenTinker: Run",
+                "enablement": "editorLangId == php"
+            },
+            {
+                "command": "opentinker.runSelection",
+                "title": "OpenTinker: Run Selection",
+                "enablement": "editorLangId == php"
+            },
+            {
+                "command": "opentinker.runFile",
+                "title": "OpenTinker: Run File",
+                "enablement": "editorLangId == php"
+            },
+            {
+                "command": "opentinker.newScratch",
+                "title": "OpenTinker: New Scratch File"
+            },
+            {
+                "command": "opentinker.openScratch",
+                "title": "OpenTinker: Open Scratch File…"
+            },
+            {
+                "command": "opentinker.openRecent",
+                "title": "OpenTinker: Open Recent Run"
+            },
+            {
+                "command": "opentinker.selectConnection",
+                "title": "OpenTinker: Select Runtime"
+            },
+            {
+                "command": "opentinker.restartSession",
+                "title": "OpenTinker: Restart Session"
+            },
+            {
+                "command": "opentinker.clearOutput",
+                "title": "OpenTinker: Clear Output"
+            },
+            {
+                "command": "opentinker.focusOutput",
+                "title": "OpenTinker: Show Output"
+            }
+        ],
+        "keybindings": [
+            {
+                "command": "opentinker.run",
+                "key": "ctrl+enter",
+                "mac": "ctrl+enter",
+                "win": "ctrl+enter",
+                "linux": "ctrl+enter",
+                "when": "editorTextFocus && editorLangId == php"
+            },
+            {
+                "command": "opentinker.run",
+                "key": "cmd+enter",
+                "mac": "cmd+enter",
+                "when": "editorTextFocus && editorLangId == php"
+            }
+        ],
+        "viewsContainers": {
+            "activitybar": [
+                {
+                    "id": "opentinker",
+                    "title": "OpenTinker",
+                    "icon": "media/opentinker.svg"
+                }
+            ]
+        },
+        "views": {
+            "opentinker": [
+                {
+                    "id": "opentinker.main",
+                    "name": "Tinker"
+                }
+            ]
+        },
+        "menus": {
+            "view/title": [
+                {
+                    "command": "opentinker.selectConnection",
+                    "when": "view == opentinker.main",
+                    "group": "navigation@0"
+                },
+                {
+                    "command": "opentinker.newScratch",
+                    "when": "view == opentinker.main",
+                    "group": "navigation@1"
+                },
+                {
+                    "command": "opentinker.restartSession",
+                    "when": "view == opentinker.main",
+                    "group": "navigation@2"
+                }
+            ],
+            "commandPalette": [
+                {
+                    "command": "opentinker.openRecent",
+                    "when": "false"
+                }
+            ]
+        },
+        "configuration": {
+            "title": "OpenTinker",
+            "properties": {
+                "opentinker.transport": {
+                    "type": "string",
+                    "enum": [
+                        "auto",
+                        "docker-compose",
+                        "local"
+                    ],
+                    "enumDescriptions": [
+                        "Use docker compose when a docker-compose.yml exists in the workspace, otherwise local PHP.",
+                        "Execute the worker through `docker compose exec`.",
+                        "Execute the worker with the local PHP binary."
+                    ],
+                    "default": "auto",
+                    "description": "How OpenTinker reaches the application runtime."
+                },
+                "opentinker.docker.service": {
+                    "type": "string",
+                    "default": "app",
+                    "description": "The docker compose service that runs the Laravel application."
+                },
+                "opentinker.docker.workingDir": {
+                    "type": "string",
+                    "default": "/var/www",
+                    "description": "The path the project is mounted at inside the service container."
+                },
+                "opentinker.php.binary": {
+                    "type": "string",
+                    "default": "php",
+                    "description": "PHP binary used by the local transport."
+                },
+                "opentinker.scratchDir": {
+                    "type": "string",
+                    "default": ".tinker",
+                    "description": "Directory (relative to the workspace) for scratch files."
+                },
+                "opentinker.executionMode": {
+                    "type": "string",
+                    "enum": [
+                        "statements",
+                        "file"
+                    ],
+                    "enumDescriptions": [
+                        "Execute scratch files statement by statement so every line gets its own result card.",
+                        "Execute the whole file as a single statement card."
+                    ],
+                    "default": "statements",
+                    "description": "How scratch files are executed."
+                },
+                "opentinker.timeoutMs": {
+                    "type": "number",
+                    "default": 30000,
+                    "description": "Milliseconds a snippet may run before the session is killed and restarted."
+                },
+                "opentinker.dumpTheme": {
+                    "type": "string",
+                    "enum": [
+                        "dark",
+                        "light"
+                    ],
+                    "default": "dark",
+                    "description": "Theme for rendered VarDumper output."
+                },
+                "opentinker.maxOutputBytes": {
+                    "type": "number",
+                    "default": 2097152,
+                    "description": "Maximum bytes of rendered output the webview keeps per run."
+                }
+            }
+        }
+    },
+    "scripts": {
+        "build": "node esbuild.mjs",
+        "watch": "node esbuild.mjs --watch",
+        "typecheck": "tsc --noEmit",
+        "lint": "eslint src test",
+        "format": "prettier --write .",
+        "format:check": "prettier --check .",
+        "test": "vitest run",
+        "package": "npm run build && vsce package --no-dependencies",
+        "vscode:prepublish": "npm run build"
+    },
+    "devDependencies": {
+        "@types/node": "^22.13.5",
+        "@types/vscode": "^1.90.0",
+        "@vscode/vsce": "^3.2.2",
+        "esbuild": "^0.25.0",
+        "eslint": "^9.19.0",
+        "eslint-config-prettier": "^10.0.1",
+        "prettier": "^3.4.2",
+        "prettier-plugin-organize-imports": "^4.1.0",
+        "typescript": "^5.7.3",
+        "typescript-eslint": "^8.23.0",
+        "vitest": "^3.0.5"
+    }
+}

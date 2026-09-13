@@ -1,0 +1,26 @@
+name: Release
+
+on:
+    push:
+        tags:
+            - 'v*'
+
+jobs:
+    publish:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 20
+                  cache: npm
+            - run: npm install
+            - run: npm run build
+            - name: Publish to Visual Studio Marketplace
+              run: npx vsce publish --no-dependencies -p "$VSCE_PAT"
+              env:
+                  VSCE_PAT: ${{ secrets.VSCE_PAT }}
+            - name: Publish to Open VSX
+              run: npx ovsx publish --no-dependencies -p "$OVSX_PAT"
+              env:
+                  OVSX_PAT: ${{ secrets.OVSX_PAT }}
