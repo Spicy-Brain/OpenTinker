@@ -1,60 +1,54 @@
 # Roadmap
 
-Status legend: `[x]` shipped, `[~]` in progress, `[ ]` planned.
+Status legend: `[x]` implemented, `[~]` partly implemented, `[ ]` planned.
 
-## Phase 0 — Foundation
+## Done in 0.3
 
-- [x] Repo scaffold: esbuild, ESLint, Prettier, VS Code launch config, CI
-- [x] Protocol spec (see [protocol.md](protocol.md))
-- [x] Persistent PHP worker with PsySH, HtmlDumper dumps, token rewriter
-- [x] Docker Compose and local transports
-- [x] Run selection/file commands, output webview, status bar
-- [x] Publish pipeline stubs for Marketplace and Open VSX
+- [x] Fresh session per run (fork from the booted app), with keep-session as an option
+- [x] Stop without restarting PHP; clean reporting of fatals, `exit()` and crashes
+- [x] Statement splitting with the app's php-parser; syntax errors before running
+- [x] Protocol v2 handshake with versions and capabilities
+- [x] Worker split into classes and built into one file
+- [x] Integration tests against real apps in CI (PHP 8.2–8.4, Laravel 10–13, PsySH
+      before and after 0.12.22) and a real VS Code end-to-end suite
+- [x] Run controller with explicit states; `extension.ts` split into modules
+- [x] Saved targets with per-file targets, auto-detection and a single target form
+- [x] Bundled results front end with typed messages and happy-dom tests
+- [x] Status bar target (red on production), inline results, results beside or in panel
+- [x] Scratch-only Cmd/Ctrl+Enter, Cmd/Ctrl+Shift+Enter for selections, editor ▶
+- [x] Run comparison markers
+- [x] Error display: scratch line first, clickable app frames, hidden internals
+- [x] `dd()`/`exit()` end runs cleanly
+- [x] Eloquent model cards
+- [x] Database rollback toggle; production guard for writes
+- [x] Per-statement timing and N+1 hints
+- [x] Model hints for autocomplete; Intelephense check
+- [x] Tinker This Model, Run Clipboard, Run Selection in any PHP file
+- [x] Copy as text, JSON, PHP array, CSV and Markdown
+- [x] Shared snippets in `.tinker/snippets/`
+- [x] Plain PHP and custom bootstrap files
 
-## Phase 1 — Tinker window (current)
+## Next
 
-- [x] Scratch files under `.tinker/` with gitignore offer
-- [x] Statement-by-statement execution with per-line result cards
-- [x] SQL insight via `DB::listen` attached to each statement
-- [x] Sidebar view: scratch files, recent runs, session status
-- [x] Per-file stored output, Run Again / Restart / Clear toolbar
-- [x] `Ctrl+Enter` primary keybinding, CodeLens run button
-- [x] Runtime picker: Compose service, running container, or local PHP
-- [ ] History search across runs
-- [ ] Boot script per connection (`auth()->loginUsingId(1)`, etc.)
+- [ ] Auto-run on save or after typing stops (deliberately left for later)
+- [ ] Boot script per target (`auth()->loginUsingId(1)`, feature flags)
+- [ ] Snippet folders and import/export
+- [ ] Richer `//?` probes (loop iterations, timing)
+- [ ] Finer error positions inside multi-line statements (PsySH pretty-prints code)
+- [ ] Dump theme options beyond the VS Code colours
 
-## Phase 2 — Insight
-
-- [ ] Variable inspector panel backed by `scope` frames
-- [ ] Magic comments (`//?` expected values, live coverage)
-- [ ] Table rendering for arrays/collections
-- [ ] Email and HTTP response previews
-- [ ] File context: inject `use` statements from the active file
-- [ ] Output polish: collapse, search, copy
-
-## Phase 3 — Library
-
-- [ ] Snippet library with folders, search, import/export
-- [ ] Laravel log tail panel
-- [ ] Dump theme picker and custom themes
-
-## Phase 4 — Remote
-
-- [ ] SSH transport and remote boot scripts
-- [ ] SSH connection manager UX
-- [ ] Optional Laravel Boost MCP interoperability
-
-## Phase 5 — Windows / WSL
+## Windows / WSL
 
 - [ ] `WslTransport` for UNC workspaces (`\\wsl.localhost\...`)
 - [ ] Remote-WSL verification (extension host runs inside the distro)
-- [ ] Distro picker, path translation, `WSL_UTF8` handling
+- [ ] Native Windows PHP: fresh runs restart PHP each time (no `pcntl`); measure and
+      consider a warm spare process
 
 See [wsl-support.md](wsl-support.md) for the full plan.
 
-## Phase 6 — Hardening
+## Release
 
-- [ ] Timeout/crash-recovery test matrix (PHP 8.2–8.4, Laravel 11–13)
-- [ ] Output size limits, memory pressure behaviour
-- [ ] Marketplace/Open VSX listing assets, icon, demo GIF
-- [ ] 1.0 release
+- [ ] Marketplace/Open VSX listing assets, PNG icon, demo GIF
+- [ ] Release checklist and store submission (see [store-release-plan.md](store-release-plan.md))
+- [ ] Optional Laravel Boost MCP interoperability
+- [ ] 1.0

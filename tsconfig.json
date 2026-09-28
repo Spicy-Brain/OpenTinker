@@ -18,5 +18,6 @@
         "noEmit": true,
         "types": ["node", "vscode"]
     },
-    "include": ["src/**/*.ts", "test/**/*.ts", "esbuild.mjs"]
+    "include": ["src/**/*.ts", "test/**/*.ts", "esbuild.mjs"],
+    "exclude": ["src/webview/**", "test/webview/**"]
 }

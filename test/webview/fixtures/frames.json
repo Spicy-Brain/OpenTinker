@@ -1,0 +1,434 @@
+{
+    "code": "<?php\n\nuse App\\Models\\User;\nuse Illuminate\\Support\\Str;\n\n$user = new User(['name' => 'Ada Lovelace', 'email' => 'ada@example.com']);\n$user->name = 'Ada King';\necho \"Hello from OpenTinker\\n\";\ncollect([['id' => 1, 'name' => 'Ada'], ['id' => 2, 'name' => 'Grace'], ['id' => 3, 'name' => 'Linus']]);\ndump(Str::of('opentinker')->title(), ['nested' => ['a' => 1, 'b' => [true, null, 1.5]]]);\nforeach (range(1, 4) as $i) { DB::select('select ? as n', [$i]); }\n$total = 21 * 2; //?\n'<h1 style=\"font-family:sans-serif\">Hello</h1><p>An HTML preview</p>';\nthrow new RuntimeException('Something went wrong in the scratch file');",
+    "frames": [
+        {
+            "type": "statement",
+            "id": "demo",
+            "stmt": 1,
+            "line": 3,
+            "endLine": 3,
+            "ok": true,
+            "ms": 16.9,
+            "memory": 36175872,
+            "queries": [],
+            "sql": {
+                "total": 0,
+                "time": 0,
+                "repeated": []
+            },
+            "import": true
+        },
+        {
+            "type": "statement",
+            "id": "demo",
+            "stmt": 2,
+            "line": 4,
+            "endLine": 4,
+            "ok": true,
+            "ms": 0.15,
+            "memory": 36175872,
+            "queries": [],
+            "sql": {
+                "total": 0,
+                "time": 0,
+                "repeated": []
+            },
+            "import": true
+        },
+        {
+            "type": "value",
+            "id": "demo",
+            "stmt": 3,
+            "line": 6,
+            "short": "User",
+            "html": "<span class=sf-dump-note>App\\Models\\User</span> {<a class=sf-dump-ref>#6482</a><samp data-depth=1 class=sf-dump-expanded>\n  <span class=sf-dump-meta>name</span>: \"<span class=sf-dump-str title=\"12 characters\">Ada Lovelace</span>\"\n  <span class=sf-dump-meta>email</span>: \"<span class=sf-dump-str title=\"15 characters\">ada@example.com</span>\"\n</samp>}\n\n",
+            "model": {
+                "class": "App\\Models\\User",
+                "key": null,
+                "keyName": "id",
+                "table": "users",
+                "exists": false,
+                "recentlyCreated": false,
+                "attributes": [
+                    {
+                        "name": "name",
+                        "value": "Ada Lovelace",
+                        "type": "string",
+                        "cast": null,
+                        "hidden": false,
+                        "dirty": true
+                    },
+                    {
+                        "name": "email",
+                        "value": "ada@example.com",
+                        "type": "string",
+                        "cast": null,
+                        "hidden": false,
+                        "dirty": true
+                    }
+                ],
+                "relations": [],
+                "dirty": [
+                    "name",
+                    "email"
+                ]
+            },
+            "copy": {
+                "json": "{\n    \"name\": \"Ada Lovelace\",\n    \"email\": \"ada@example.com\"\n}",
+                "php": "[\n    'name' => 'Ada Lovelace',\n    'email' => 'ada@example.com',\n]"
+            }
+        },
+        {
+            "type": "statement",
+            "id": "demo",
+            "stmt": 3,
+            "line": 6,
+            "endLine": 6,
+            "ok": true,
+            "ms": 12.37,
+            "memory": 36175872,
+            "queries": [],
+            "sql": {
+                "total": 0,
+                "time": 0,
+                "repeated": []
+            },
+            "short": "User"
+        },
+        {
+            "type": "value",
+            "id": "demo",
+            "stmt": 4,
+            "line": 7,
+            "short": "Ada King",
+            "html": "\"<span class=sf-dump-str title=\"8 characters\">Ada King</span>\"\n\n",
+            "copy": {
+                "json": "\"Ada King\"",
+                "php": "'Ada King'"
+            }
+        },
+        {
+            "type": "statement",
+            "id": "demo",
+            "stmt": 4,
+            "line": 7,
+            "endLine": 7,
+            "ok": true,
+            "ms": 0.3,
+            "memory": 36175872,
+            "queries": [],
+            "sql": {
+                "total": 0,
+                "time": 0,
+                "repeated": []
+            },
+            "short": "Ada King"
+        },
+        {
+            "type": "output",
+            "id": "demo",
+            "text": "Hello from OpenTinker\n",
+            "stmt": 5,
+            "line": 8
+        },
+        {
+            "type": "statement",
+            "id": "demo",
+            "stmt": 5,
+            "line": 8,
+            "endLine": 8,
+            "ok": true,
+            "ms": 0.2,
+            "memory": 36175872,
+            "queries": [],
+            "sql": {
+                "total": 0,
+                "time": 0,
+                "repeated": []
+            }
+        },
+        {
+            "type": "value",
+            "id": "demo",
+            "stmt": 6,
+            "line": 9,
+            "short": "Illuminate\\Support\\Collection(3)",
+            "html": "<span class=sf-dump-note>Illuminate\\Support\\Collection</span> {<a class=sf-dump-ref>#6519</a><samp data-depth=1 class=sf-dump-expanded>\n  <span class=sf-dump-meta>all</span>: <span class=sf-dump-note>array:3</span> [<samp data-depth=2 class=sf-dump-compact>\n    <span class=sf-dump-index>0</span> => <span class=sf-dump-note>array:2</span> [<samp data-depth=3 class=sf-dump-compact>\n      \"<span class=sf-dump-key>id</span>\" => <span class=sf-dump-num>1</span>\n      \"<span class=sf-dump-key>name</span>\" => \"<span class=sf-dump-str title=\"3 characters\">Ada</span>\"\n    </samp>]\n    <span class=sf-dump-index>1</span> => <span class=sf-dump-note>array:2</span> [<samp data-depth=3 class=sf-dump-compact>\n      \"<span class=sf-dump-key>id</span>\" => <span class=sf-dump-num>2</span>\n      \"<span class=sf-dump-key>name</span>\" => \"<span class=sf-dump-str title=\"5 characters\">Grace</span>\"\n    </samp>]\n    <span class=sf-dump-index>2</span> => <span class=sf-dump-note>array:2</span> [<samp data-depth=3 class=sf-dump-compact>\n      \"<span class=sf-dump-key>id</span>\" => <span class=sf-dump-num>3</span>\n      \"<span class=sf-dump-key>name</span>\" => \"<span class=sf-dump-str title=\"5 characters\">Linus</span>\"\n    </samp>]\n  </samp>]\n</samp>}\n\n",
+            "table": {
+                "columns": [
+                    "id",
+                    "name"
+                ],
+                "rows": [
+                    [
+                        "1",
+                        "Ada"
+                    ],
+                    [
+                        "2",
+                        "Grace"
+                    ],
+                    [
+                        "3",
+                        "Linus"
+                    ]
+                ],
+                "truncated": false
+            },
+            "copy": {
+                "json": "[\n    {\n        \"id\": 1,\n        \"name\": \"Ada\"\n    },\n    {\n        \"id\": 2,\n        \"name\": \"Grace\"\n    },\n    {\n        \"id\": 3,\n        \"name\": \"Linus\"\n    }\n]",
+                "php": "[\n    [\n        'id' => 1,\n        'name' => 'Ada',\n    ],\n    [\n        'id' => 2,\n        'name' => 'Grace',\n    ],\n    [\n        'id' => 3,\n        'name' => 'Linus',\n    ],\n]"
+            }
+        },
+        {
+            "type": "statement",
+            "id": "demo",
+            "stmt": 6,
+            "line": 9,
+            "endLine": 9,
+            "ok": true,
+            "ms": 0.48,
+            "memory": 36175872,
+            "queries": [],
+            "sql": {
+                "total": 0,
+                "time": 0,
+                "repeated": []
+            },
+            "short": "Illuminate\\Support\\Collection(3)"
+        },
+        {
+            "type": "dump",
+            "id": "demo",
+            "html": "<span class=sf-dump-note>Illuminate\\Support\\Stringable</span> {<a class=sf-dump-ref>#6489</a><samp data-depth=1 class=sf-dump-expanded>\n  <span class=sf-dump-meta>value</span>: \"<span class=sf-dump-str title=\"10 characters\">Opentinker</span>\"\n</samp>}\n\n",
+            "short": "Opentinker",
+            "stmt": 7,
+            "line": 10,
+            "copy": {
+                "json": "\"Opentinker\"",
+                "php": "'Opentinker'"
+            }
+        },
+        {
+            "type": "dump",
+            "id": "demo",
+            "html": "<span class=sf-dump-note>array:1</span> [<samp data-depth=1 class=sf-dump-expanded>\n  \"<span class=sf-dump-key>nested</span>\" => <span class=sf-dump-note>array:2</span> [<samp data-depth=2 class=sf-dump-compact>\n    \"<span class=sf-dump-key>a</span>\" => <span class=sf-dump-num>1</span>\n    \"<span class=sf-dump-key>b</span>\" => <span class=sf-dump-note>array:3</span> [<samp data-depth=3 class=sf-dump-compact>\n      <span class=sf-dump-index>0</span> => <span class=sf-dump-const>true</span>\n      <span class=sf-dump-index>1</span> => <span class=sf-dump-const>null</span>\n      <span class=sf-dump-index>2</span> => <span class=sf-dump-num>1.5</span>\n    </samp>]\n  </samp>]\n</samp>]\n\n",
+            "short": "array(1)",
+            "stmt": 7,
+            "line": 10,
+            "copy": {
+                "json": "{\n    \"nested\": {\n        \"a\": 1,\n        \"b\": [\n            true,\n            null,\n            1.5\n        ]\n    }\n}",
+                "php": "[\n    'nested' => [\n        'a' => 1,\n        'b' => [\n            true,\n            NULL,\n            1.5,\n        ],\n    ],\n]"
+            }
+        },
+        {
+            "type": "statement",
+            "id": "demo",
+            "stmt": 7,
+            "line": 10,
+            "endLine": 10,
+            "ok": true,
+            "ms": 0.51,
+            "memory": 36175872,
+            "queries": [],
+            "sql": {
+                "total": 0,
+                "time": 0,
+                "repeated": []
+            }
+        },
+        {
+            "type": "statement",
+            "id": "demo",
+            "stmt": 8,
+            "line": 11,
+            "endLine": 11,
+            "ok": true,
+            "ms": 2.82,
+            "memory": 36175872,
+            "queries": [
+                {
+                    "sql": "select ? as n",
+                    "bindings": [
+                        "1"
+                    ],
+                    "time": 2.15
+                },
+                {
+                    "sql": "select ? as n",
+                    "bindings": [
+                        "2"
+                    ],
+                    "time": 0.01
+                },
+                {
+                    "sql": "select ? as n",
+                    "bindings": [
+                        "3"
+                    ],
+                    "time": 0
+                },
+                {
+                    "sql": "select ? as n",
+                    "bindings": [
+                        "4"
+                    ],
+                    "time": 0
+                }
+            ],
+            "sql": {
+                "total": 4,
+                "time": 2.16,
+                "repeated": [
+                    {
+                        "sql": "select ? as n",
+                        "count": 4
+                    }
+                ]
+            }
+        },
+        {
+            "type": "inline",
+            "id": "demo",
+            "stmt": 9,
+            "line": 12,
+            "text": "42",
+            "html": "<span class=sf-dump-num>42</span>\n\n"
+        },
+        {
+            "type": "value",
+            "id": "demo",
+            "stmt": 9,
+            "line": 12,
+            "short": "42",
+            "html": "<span class=sf-dump-num>42</span>\n\n",
+            "copy": {
+                "json": "42",
+                "php": "42"
+            }
+        },
+        {
+            "type": "statement",
+            "id": "demo",
+            "stmt": 9,
+            "line": 12,
+            "endLine": 12,
+            "ok": true,
+            "ms": 0.24,
+            "memory": 36175872,
+            "queries": [],
+            "sql": {
+                "total": 0,
+                "time": 0,
+                "repeated": []
+            },
+            "short": "42"
+        },
+        {
+            "type": "value",
+            "id": "demo",
+            "stmt": 10,
+            "line": 13,
+            "short": "<h1 style=\"font-family:sans-serif\">Hello</h1><p>An HTML preview</p>",
+            "html": "\"<span class=sf-dump-str title=\"67 characters\">&lt;h1 style=&quot;font-family:sans-serif&quot;&gt;Hello&lt;/h1&gt;&lt;p&gt;An HTML preview&lt;/p&gt;</span>\"\n\n",
+            "preview": {
+                "html": "<h1 style=\"font-family:sans-serif\">Hello</h1><p>An HTML preview</p>",
+                "kind": "html"
+            },
+            "copy": {
+                "json": "\"<h1 style=\\\"font-family:sans-serif\\\">Hello</h1><p>An HTML preview</p>\"",
+                "php": "'<h1 style=\"font-family:sans-serif\">Hello</h1><p>An HTML preview</p>'"
+            }
+        },
+        {
+            "type": "statement",
+            "id": "demo",
+            "stmt": 10,
+            "line": 13,
+            "endLine": 13,
+            "ok": true,
+            "ms": 0.12,
+            "memory": 36175872,
+            "queries": [],
+            "sql": {
+                "total": 0,
+                "time": 0,
+                "repeated": []
+            },
+            "short": "<h1 style=\"font-family:sans-serif\">Hello</h1><p>An HTML preview</p>"
+        },
+        {
+            "type": "error",
+            "id": "demo",
+            "stmt": 11,
+            "line": 14,
+            "ok": false,
+            "ms": 0.14,
+            "errorClass": "RuntimeException",
+            "message": "Something went wrong in the scratch file",
+            "scratchLine": 14,
+            "file": null,
+            "errorLine": 3,
+            "frames": [
+                {
+                    "file": null,
+                    "line": 14,
+                    "call": "",
+                    "kind": "scratch"
+                }
+            ]
+        },
+        {
+            "type": "statement",
+            "id": "demo",
+            "stmt": 11,
+            "line": 14,
+            "endLine": 14,
+            "ok": false,
+            "ms": 0.16,
+            "memory": 36175872,
+            "queries": [],
+            "sql": {
+                "total": 0,
+                "time": 0,
+                "repeated": []
+            }
+        },
+        {
+            "type": "scope",
+            "id": "demo",
+            "vars": [
+                {
+                    "name": "user",
+                    "type": "App\\Models\\User",
+                    "short": "User",
+                    "html": "<span class=sf-dump-note>App\\Models\\User</span> {<a class=sf-dump-ref>#6482</a><samp data-depth=1 class=sf-dump-expanded>\n  <span class=sf-dump-meta>name</span>: \"<span class=sf-dump-str title=\"8 characters\">Ada King</span>\"\n  <span class=sf-dump-meta>email</span>: \"<span class=sf-dump-str title=\"15 characters\">ada@example.com</span>\"\n</samp>}\n\n"
+                },
+                {
+                    "name": "i",
+                    "type": "int",
+                    "short": "4",
+                    "html": "<span class=sf-dump-num>4</span>\n\n"
+                },
+                {
+                    "name": "total",
+                    "type": "int",
+                    "short": "42",
+                    "html": "<span class=sf-dump-num>42</span>\n\n"
+                }
+            ],
+            "truncated": false
+        },
+        {
+            "type": "result",
+            "id": "demo",
+            "ok": false,
+            "failed": true,
+            "statements": 11,
+            "ms": 41.74,
+            "memory": 36175872,
+            "rolledBack": null,
+            "ended": null
+        }
+    ]
+}

@@ -1,8 +1,8 @@
 {
     "name": "opentinker",
     "displayName": "OpenTinker",
-    "description": "Tinkerwell-style scratchpad for Laravel: per-line results, SQL insight, persistent PsySH sessions.",
-    "version": "0.2.0",
+    "description": "A Tinkerwell-style scratchpad for Laravel and PHP in VS Code: fresh runs, per-line results, model cards, SQL insight and safe production runs.",
+    "version": "0.3.0",
     "publisher": "open-tinker",
     "license": "MIT",
     "private": true,
@@ -17,10 +17,13 @@
     "keywords": [
         "laravel",
         "tinker",
+        "tinkerwell",
         "psysh",
         "repl",
         "php",
-        "docker"
+        "scratchpad",
+        "docker",
+        "eloquent"
     ],
     "repository": {
         "type": "git",
@@ -30,82 +33,214 @@
     "activationEvents": [
         "onLanguage:php",
         "onView:opentinker.main",
-        "onCommand:opentinker.run",
-        "onCommand:opentinker.runSelection",
-        "onCommand:opentinker.runFile",
-        "onCommand:opentinker.newScratch",
-        "onCommand:opentinker.openScratch",
-        "onCommand:opentinker.selectConnection",
-        "onCommand:opentinker.restartSession",
-        "onCommand:opentinker.clearOutput",
-        "onCommand:opentinker.focusOutput"
+        "onView:opentinker.results",
+        "workspaceContains:artisan",
+        "workspaceContains:composer.json"
     ],
     "contributes": {
         "commands": [
             {
-                "command": "opentinker.run",
-                "title": "OpenTinker: Run",
-                "enablement": "editorLangId == php"
+                "command": "opentinker.open",
+                "title": "Open Tinker Window",
+                "category": "OpenTinker",
+                "icon": "$(beaker)"
             },
             {
-                "command": "opentinker.runSelection",
-                "title": "OpenTinker: Run Selection",
-                "enablement": "editorLangId == php"
+                "command": "opentinker.run",
+                "title": "Run",
+                "category": "OpenTinker",
+                "enablement": "editorLangId == php",
+                "icon": "$(play)"
             },
             {
                 "command": "opentinker.runFile",
-                "title": "OpenTinker: Run File",
+                "title": "Run Scratch File",
+                "category": "OpenTinker",
+                "icon": "$(run-all)"
+            },
+            {
+                "command": "opentinker.runSelection",
+                "title": "Run Selection or Line",
+                "category": "OpenTinker",
                 "enablement": "editorLangId == php"
             },
             {
+                "command": "opentinker.runClipboard",
+                "title": "Run Clipboard",
+                "category": "OpenTinker"
+            },
+            {
+                "command": "opentinker.stop",
+                "title": "Stop Run",
+                "category": "OpenTinker",
+                "icon": "$(debug-stop)"
+            },
+            {
+                "command": "opentinker.rerun",
+                "title": "Run Again",
+                "category": "OpenTinker"
+            },
+            {
                 "command": "opentinker.newScratch",
-                "title": "OpenTinker: New Scratch File"
+                "title": "New Scratch File",
+                "category": "OpenTinker",
+                "icon": "$(new-file)"
             },
             {
                 "command": "opentinker.openScratch",
-                "title": "OpenTinker: Open Scratch File…"
+                "title": "Open Scratch File…",
+                "category": "OpenTinker"
             },
             {
-                "command": "opentinker.openRecent",
-                "title": "OpenTinker: Open Recent Run"
+                "command": "opentinker.selectTarget",
+                "title": "Choose Target…",
+                "category": "OpenTinker",
+                "icon": "$(server-environment)"
             },
             {
                 "command": "opentinker.selectConnection",
-                "title": "OpenTinker: Select Runtime"
+                "title": "Select Runtime (Choose Target)",
+                "category": "OpenTinker"
+            },
+            {
+                "command": "opentinker.selectTargetForFile",
+                "title": "Choose Target for This File…",
+                "category": "OpenTinker"
+            },
+            {
+                "command": "opentinker.newTarget",
+                "title": "New Target…",
+                "category": "OpenTinker"
+            },
+            {
+                "command": "opentinker.editTarget",
+                "title": "Edit Target…",
+                "category": "OpenTinker",
+                "icon": "$(gear)"
+            },
+            {
+                "command": "opentinker.toggleSessionMode",
+                "title": "Toggle Fresh / Keep Session",
+                "category": "OpenTinker"
+            },
+            {
+                "command": "opentinker.toggleRollback",
+                "title": "Toggle Database Rollback",
+                "category": "OpenTinker"
             },
             {
                 "command": "opentinker.restartSession",
-                "title": "OpenTinker: Restart Session"
+                "title": "Reset Kept Session",
+                "category": "OpenTinker",
+                "icon": "$(debug-restart)"
+            },
+            {
+                "command": "opentinker.saveSnippet",
+                "title": "Save Snippet",
+                "category": "OpenTinker",
+                "icon": "$(save)"
+            },
+            {
+                "command": "opentinker.runSnippet",
+                "title": "Run Snippet…",
+                "category": "OpenTinker",
+                "icon": "$(play)"
+            },
+            {
+                "command": "opentinker.openSnippet",
+                "title": "Edit Snippet",
+                "category": "OpenTinker",
+                "icon": "$(edit)"
+            },
+            {
+                "command": "opentinker.searchHistory",
+                "title": "Search Run History",
+                "category": "OpenTinker",
+                "icon": "$(search)"
+            },
+            {
+                "command": "opentinker.clearHistory",
+                "title": "Clear Run History",
+                "category": "OpenTinker"
+            },
+            {
+                "command": "opentinker.doctor",
+                "title": "Check Setup",
+                "category": "OpenTinker",
+                "icon": "$(pulse)"
+            },
+            {
+                "command": "opentinker.generateModelHints",
+                "title": "Generate Model Hints (Autocomplete)",
+                "category": "OpenTinker"
+            },
+            {
+                "command": "opentinker.showLogs",
+                "title": "Follow Laravel Log",
+                "category": "OpenTinker"
+            },
+            {
+                "command": "opentinker.stopLogs",
+                "title": "Stop Following Laravel Log",
+                "category": "OpenTinker"
             },
             {
                 "command": "opentinker.clearOutput",
-                "title": "OpenTinker: Clear Output"
+                "title": "Clear Results",
+                "category": "OpenTinker"
             },
             {
                 "command": "opentinker.focusOutput",
-                "title": "OpenTinker: Show Output"
+                "title": "Show Results",
+                "category": "OpenTinker"
+            },
+            {
+                "command": "opentinker.openRecent",
+                "title": "Open Recent Run",
+                "category": "OpenTinker"
+            },
+            {
+                "command": "opentinker.runCallable",
+                "title": "Run Callable",
+                "category": "OpenTinker"
+            },
+            {
+                "command": "opentinker.tinkerModel",
+                "title": "Tinker This Model",
+                "category": "OpenTinker"
             }
         ],
         "keybindings": [
             {
                 "command": "opentinker.run",
                 "key": "ctrl+enter",
-                "mac": "ctrl+enter",
-                "win": "ctrl+enter",
-                "linux": "ctrl+enter",
+                "mac": "cmd+enter",
+                "when": "editorTextFocus && opentinker.isScratch"
+            },
+            {
+                "command": "opentinker.runSelection",
+                "key": "ctrl+shift+enter",
+                "mac": "cmd+shift+enter",
                 "when": "editorTextFocus && editorLangId == php"
             },
             {
-                "command": "opentinker.run",
-                "key": "cmd+enter",
-                "mac": "cmd+enter",
-                "when": "editorTextFocus && editorLangId == php"
+                "command": "opentinker.stop",
+                "key": "ctrl+alt+c",
+                "mac": "cmd+alt+c",
+                "when": "opentinker.running"
             }
         ],
         "viewsContainers": {
             "activitybar": [
                 {
                     "id": "opentinker",
+                    "title": "OpenTinker",
+                    "icon": "media/opentinker.svg"
+                }
+            ],
+            "panel": [
+                {
+                    "id": "opentinkerPanel",
                     "title": "OpenTinker",
                     "icon": "media/opentinker.svg"
                 }
@@ -117,12 +252,44 @@
                     "id": "opentinker.main",
                     "name": "Tinker"
                 }
+            ],
+            "opentinkerPanel": [
+                {
+                    "type": "webview",
+                    "id": "opentinker.results",
+                    "name": "Results",
+                    "when": "config.opentinker.results.location == panel"
+                }
             ]
         },
         "menus": {
+            "editor/title/run": [
+                {
+                    "command": "opentinker.runFile",
+                    "when": "opentinker.isScratch && !opentinker.running",
+                    "group": "navigation@0"
+                },
+                {
+                    "command": "opentinker.stop",
+                    "when": "opentinker.isScratch && opentinker.running",
+                    "group": "navigation@0"
+                }
+            ],
+            "editor/context": [
+                {
+                    "command": "opentinker.runSelection",
+                    "when": "editorLangId == php",
+                    "group": "opentinker@1"
+                },
+                {
+                    "command": "opentinker.saveSnippet",
+                    "when": "editorLangId == php && editorHasSelection",
+                    "group": "opentinker@2"
+                }
+            ],
             "view/title": [
                 {
-                    "command": "opentinker.selectConnection",
+                    "command": "opentinker.open",
                     "when": "view == opentinker.main",
                     "group": "navigation@0"
                 },
@@ -132,50 +299,120 @@
                     "group": "navigation@1"
                 },
                 {
-                    "command": "opentinker.restartSession",
+                    "command": "opentinker.selectTarget",
                     "when": "view == opentinker.main",
                     "group": "navigation@2"
+                },
+                {
+                    "command": "opentinker.searchHistory",
+                    "when": "view == opentinker.main",
+                    "group": "navigation@3"
+                },
+                {
+                    "command": "opentinker.doctor",
+                    "when": "view == opentinker.main",
+                    "group": "1_setup@1"
+                },
+                {
+                    "command": "opentinker.generateModelHints",
+                    "when": "view == opentinker.main",
+                    "group": "1_setup@2"
+                },
+                {
+                    "command": "opentinker.runClipboard",
+                    "when": "view == opentinker.main",
+                    "group": "2_run@1"
+                },
+                {
+                    "command": "opentinker.showLogs",
+                    "when": "view == opentinker.main",
+                    "group": "2_run@2"
+                },
+                {
+                    "command": "opentinker.clearHistory",
+                    "when": "view == opentinker.main",
+                    "group": "3_history@1"
+                }
+            ],
+            "view/item/context": [
+                {
+                    "command": "opentinker.editTarget",
+                    "when": "view == opentinker.main && viewItem == target",
+                    "group": "inline"
+                },
+                {
+                    "command": "opentinker.openSnippet",
+                    "when": "view == opentinker.main && viewItem == snippet",
+                    "group": "inline"
+                },
+                {
+                    "command": "opentinker.selectTargetForFile",
+                    "when": "view == opentinker.main && viewItem == scratch",
+                    "group": "1_target"
+                },
+                {
+                    "command": "opentinker.saveSnippet",
+                    "when": "view == opentinker.main && viewItem == group-snippets",
+                    "group": "inline"
+                },
+                {
+                    "command": "opentinker.newScratch",
+                    "when": "view == opentinker.main && viewItem == group-scratch",
+                    "group": "inline"
                 }
             ],
             "commandPalette": [
                 {
                     "command": "opentinker.openRecent",
                     "when": "false"
+                },
+                {
+                    "command": "opentinker.runCallable",
+                    "when": "false"
+                },
+                {
+                    "command": "opentinker.tinkerModel",
+                    "when": "false"
+                },
+                {
+                    "command": "opentinker.rerun",
+                    "when": "false"
+                },
+                {
+                    "command": "opentinker.selectConnection",
+                    "when": "false"
+                }
+            ],
+            "editor/title": [
+                {
+                    "command": "opentinker.runFile",
+                    "when": "opentinker.isScratch && !opentinker.running",
+                    "group": "navigation@-100"
+                },
+                {
+                    "command": "opentinker.stop",
+                    "when": "opentinker.isScratch && opentinker.running",
+                    "group": "navigation@-100"
                 }
             ]
         },
         "configuration": {
             "title": "OpenTinker",
             "properties": {
-                "opentinker.transport": {
-                    "type": "string",
-                    "enum": [
-                        "auto",
-                        "docker-compose",
-                        "local"
-                    ],
-                    "enumDescriptions": [
-                        "Use docker compose when a docker-compose.yml exists in the workspace, otherwise local PHP.",
-                        "Execute the worker through `docker compose exec`.",
-                        "Execute the worker with the local PHP binary."
-                    ],
-                    "default": "auto",
-                    "description": "How OpenTinker reaches the application runtime."
-                },
-                "opentinker.docker.service": {
-                    "type": "string",
-                    "default": "app",
-                    "description": "The docker compose service that runs the Laravel application."
-                },
                 "opentinker.docker.workingDir": {
                     "type": "string",
                     "default": "/var/www",
-                    "description": "The path the project is mounted at inside the service container."
+                    "description": "Default project path inside containers for new targets. Detection usually works this out from your Compose file."
                 },
                 "opentinker.php.binary": {
                     "type": "string",
                     "default": "php",
-                    "description": "PHP binary used by the local transport."
+                    "description": "PHP binary for local targets."
+                },
+                "opentinker.ssh.phpBinary": {
+                    "type": "string",
+                    "default": "php",
+                    "description": "PHP binary used on the SSH execution host."
                 },
                 "opentinker.scratchDir": {
                     "type": "string",
@@ -193,48 +430,118 @@
                         "Execute the whole file as a single statement card."
                     ],
                     "default": "statements",
-                    "description": "How scratch files are executed."
+                    "description": "How scratch files run: statement by statement (a card per line) or as one block."
                 },
                 "opentinker.timeoutMs": {
                     "type": "number",
                     "default": 30000,
-                    "description": "Milliseconds a snippet may run before the session is killed and restarted."
-                },
-                "opentinker.dumpTheme": {
-                    "type": "string",
-                    "enum": [
-                        "dark",
-                        "light"
-                    ],
-                    "default": "dark",
-                    "description": "Theme for rendered VarDumper output."
+                    "description": "Stop a run after this many milliseconds (0 to disable). With fresh sessions the worker stays running."
                 },
                 "opentinker.maxOutputBytes": {
                     "type": "number",
                     "default": 2097152,
                     "description": "Maximum bytes of rendered output the webview keeps per run."
+                },
+                "opentinker.history.maxEntries": {
+                    "type": "number",
+                    "default": 50,
+                    "minimum": 1,
+                    "maximum": 200,
+                    "description": "Maximum number of run records stored for this workspace. Code and run metadata are retained."
+                },
+                "opentinker.history.persistResults": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Retain bounded result frames in workspace state across reloads. Results can contain sensitive application data."
+                },
+                "opentinker.session.mode": {
+                    "type": "string",
+                    "enum": [
+                        "fresh",
+                        "keep"
+                    ],
+                    "enumDescriptions": [
+                        "Every run starts from a freshly booted app, like running a script. Nothing leaks between runs.",
+                        "Variables and imports carry over between runs, like a REPL."
+                    ],
+                    "default": "fresh",
+                    "description": "How runs share state."
+                },
+                "opentinker.database.rollback": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Run code inside a database transaction and roll it back afterwards. Mail, queues, files and external calls are not rolled back."
+                },
+                "opentinker.production.confirm": {
+                    "type": "string",
+                    "enum": [
+                        "writes",
+                        "always",
+                        "never"
+                    ],
+                    "enumDescriptions": [
+                        "Ask before running code that looks like it changes data or has side effects.",
+                        "Ask before every run on production.",
+                        "Never ask."
+                    ],
+                    "default": "writes",
+                    "description": "When to confirm runs against a production environment (APP_ENV=production or a target marked production)."
+                },
+                "opentinker.results.location": {
+                    "type": "string",
+                    "enum": [
+                        "beside",
+                        "panel"
+                    ],
+                    "enumDescriptions": [
+                        "Next to the scratch file, like Tinkerwell.",
+                        "In the bottom panel next to Terminal."
+                    ],
+                    "default": "beside",
+                    "description": "Where results are shown."
+                },
+                "opentinker.inlineResults": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Show each statement's result at the end of its line."
+                },
+                "opentinker.bootstrap": {
+                    "type": "string",
+                    "default": "auto",
+                    "description": "How the worker boots the project: auto, laravel, composer (plain PHP with Composer), or a path to a bootstrap file for other frameworks. Targets can override this."
                 }
             }
-        }
+        },
+        "viewsWelcome": [
+            {
+                "view": "opentinker.main",
+                "contents": "Run PHP against your app, line by line.\n[Open Tinker Window](command:opentinker.open)\n[Choose Target](command:opentinker.selectTarget)"
+            }
+        ]
     },
     "scripts": {
         "build": "node esbuild.mjs",
         "watch": "node esbuild.mjs --watch",
-        "typecheck": "tsc --noEmit",
+        "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.webview.json",
         "lint": "eslint src test",
         "format": "prettier --write .",
         "format:check": "prettier --check .",
         "test": "vitest run",
         "package": "npm run build && vsce package --no-dependencies",
-        "vscode:prepublish": "npm run build"
+        "vscode:prepublish": "npm run build",
+        "build:worker": "node scripts/build-worker.mjs",
+        "test:worker": "php test/workerFeatures.php",
+        "test:integration": "node scripts/build-worker.mjs && php test/integration/worker.php"
     },
     "devDependencies": {
         "@types/node": "^22.13.5",
         "@types/vscode": "^1.90.0",
+        "@vscode/test-electron": "^3.1.0",
         "@vscode/vsce": "^3.2.2",
         "esbuild": "^0.25.0",
         "eslint": "^9.19.0",
         "eslint-config-prettier": "^10.0.1",
+        "happy-dom": "^20.14.5",
         "prettier": "^3.4.2",
         "prettier-plugin-organize-imports": "^4.1.0",
         "typescript": "^5.7.3",

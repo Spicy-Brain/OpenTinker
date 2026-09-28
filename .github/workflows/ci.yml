@@ -6,7 +6,8 @@ on:
     pull_request:
 
 jobs:
-    node:
+    extension:
+        name: Extension (typecheck, lint, unit tests)
         runs-on: ubuntu-latest
         steps:
             - uses: actions/checkout@v4
@@ -14,17 +15,101 @@ jobs:
               with:
                   node-version: 20
                   cache: npm
-            - run: npm install
+            - run: npm ci
             - run: npm run typecheck
             - run: npm run lint
+            - run: npm run format:check
             - run: npm run build
             - run: npm test
 
     worker:
+        name: Worker (syntax and pure transforms)
         runs-on: ubuntu-latest
         steps:
             - uses: actions/checkout@v4
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 20
             - uses: shivammathur/setup-php@v2
               with:
                   php-version: '8.4'
-            - run: php -l worker/worker.php
+            - run: node scripts/build-worker.mjs
+            - run: php -l dist/worker.php
+            - run: php test/workerFeatures.php
+
+    # Runs the real worker against freshly created apps. PsySH behaviour changes
+    # between versions (0.12.22 started rejecting re-declared imports), so the
+    # matrix covers old and new PsySH as well as Laravel and PHP versions.
+    integration:
+        name: Laravel ${{ matrix.laravel }} · PHP ${{ matrix.php }}${{ matrix.psysh && format(' · PsySH {0}', matrix.psysh) || '' }}
+        runs-on: ubuntu-latest
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    - { php: '8.2', laravel: '10' }
+                    - { php: '8.2', laravel: '11', psysh: '0.12.21' }
+                    - { php: '8.3', laravel: '12' }
+                    - { php: '8.4', laravel: '12' }
+                    - { php: '8.4', laravel: '13' }
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 20
+            - uses: shivammathur/setup-php@v2
+              with:
+                  php-version: ${{ matrix.php }}
+                  extensions: pcntl, posix, pdo_sqlite
+                  tools: composer
+            - name: Create a Laravel ${{ matrix.laravel }} app
+              run: |
+                  composer create-project "laravel/laravel:^${{ matrix.laravel }}.0" app --no-interaction --prefer-dist --quiet
+                  cd app
+                  if [ -n "${{ matrix.psysh }}" ]; then composer require --dev "psy/psysh:${{ matrix.psysh }}" -W --no-interaction --quiet; fi
+                  sed -i 's/^DB_CONNECTION=.*/DB_CONNECTION=sqlite/; s/^DB_DATABASE=/# DB_DATABASE=/' .env
+                  touch database/database.sqlite
+                  php artisan migrate --force --no-interaction
+            - run: node scripts/build-worker.mjs
+            - run: php test/integration/worker.php --base-path="$PWD/app"
+            - name: Pure transforms with this app's php-parser
+              run: OPENTINKER_APP_AUTOLOAD="$PWD/app/vendor/autoload.php" php test/workerFeatures.php
+
+    plain-php:
+        name: Plain PHP project (no Laravel)
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 20
+            - uses: shivammathur/setup-php@v2
+              with:
+                  php-version: '8.3'
+                  extensions: pcntl, posix
+                  tools: composer
+            - run: mkdir plain && cd plain && composer require psy/psysh --no-interaction --quiet
+            - run: node scripts/build-worker.mjs
+            - run: php test/integration/worker.php --base-path="$PWD/plain" --laravel=0
+
+    e2e:
+        name: VS Code end-to-end
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 20
+                  cache: npm
+            - uses: shivammathur/setup-php@v2
+              with:
+                  php-version: '8.4'
+                  extensions: pcntl, posix, pdo_sqlite
+                  tools: composer
+            - run: npm ci
+            - run: npm run build
+            - name: Create a throwaway Laravel app
+              run: |
+                  composer create-project laravel/laravel app --no-interaction --prefer-dist --quiet
+                  cd app && php artisan migrate --force --no-interaction
+            - run: xvfb-run -a node test/e2e/run.mjs "$PWD/app" --reset

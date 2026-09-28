@@ -1,75 +1,122 @@
-# Worker protocol
+# Worker protocol (version 2)
 
-OpenTinker communicates with the PHP worker over newline-delimited JSON (NDJSON) on
-stdin/stdout. Every frame is a single-line JSON object. UTF-8 only; decoders must
-tolerate `\r\n` so Windows/WSL transports can be added without changes.
+OpenTinker talks to its PHP worker over newline-delimited JSON on stdin/stdout. Every
+frame is one JSON object on one line, UTF-8. Decoders tolerate `\r\n`.
 
-## Lifecycle
+The TypeScript types in [`src/shared/protocol.ts`](../src/shared/protocol.ts) are the
+reference. `PROTOCOL_VERSION` there must equal `Protocol::VERSION` in
+[`worker/src/Protocol.php`](../worker/src/Protocol.php); a unit test checks this, and
+the extension refuses a worker that reports a different version.
 
-1. The extension spawns the worker and waits for a `ready` frame (15s timeout).
-2. An `exec` request runs a snippet. In `statements` mode the worker splits it into
-   top-level statements and executes them one by one in the same PsySH scope.
-3. Streaming frames (`output`, `dump`, `value`, `error`) carry `stmt` (1-based
-   statement index) and `line` (source line) so the panel can group them into cards.
-4. Each statement is finalized with a `statement` frame. The run ends with a `result`
-   frame, which is the only terminal frame (besides `pong`).
-5. `shutdown` asks the worker to exit; the extension kills the process if it does not
-   exit promptly.
+## Process model
+
+```
+extension ──stdin/stdout──▶ worker (boots the app once, stays pristine)
+                              ├─ fork per run ──▶ fresh child: runs code, exits
+                              └─ fork once ─────▶ kept-session child: runs code, stays
+```
+
+- The worker boots the project once (Laravel, plain Composer, or a custom bootstrap
+  file) and never runs user code itself.
+- **Fresh runs** (`fresh: true`, the default) fork a child per run. The child starts
+  from the booted app and is thrown away afterwards, so nothing leaks between runs:
+  variables, imports, declared functions and classes, or container state.
+- **Kept-session runs** (`fresh: false`) go to one long-lived child, so variables
+  carry over. `reset` kills that child; Laravel does not boot again.
+- While a child runs, the worker watches stdin. `cancel` kills the child and the worker
+  stays warm. Other requests wait in a queue; `ping` is answered immediately.
+- If a child dies without finishing (a fatal error, `exit()` in app code, a kill), the
+  worker reports it from the child's error log. The first logged fatal is used, because
+  later ones come from shutdown handlers.
+- Without `pcntl` (native Windows PHP) runs happen in the worker process. The extension
+  restarts the worker before each fresh run instead.
+- Database and Redis connections are closed before forking so parent and child never
+  share a socket. Forked children exit with `SIGKILL`, which skips shutdown handlers
+  inherited from the app, and they swap Laravel's exception handler for one that
+  reports without writing to the console.
 
 ## Requests (extension → worker)
 
-| Frame      | Fields               | Notes                                 |
-| ---------- | -------------------- | ------------------------------------- |
-| `exec`     | `id`, `code`, `mode` | `mode` is `statements` or `file`      |
-| `scope`    | `id`                 | Returns the current session variables |
-| `ping`     | `id`                 | Liveness check                        |
-| `shutdown` | —                    | Graceful exit                         |
+| Request      | Fields                                                | Notes                                              |
+| ------------ | ----------------------------------------------------- | -------------------------------------------------- |
+| `exec`       | `id`, `code`, `mode`, `fresh`, `rollback`, `imports?` | Runs code; see below                               |
+| `cancel`     | `id`                                                  | Stops the running run with that id                 |
+| `reset`      | `id`                                                  | Clears the kept session (`ok: false` without fork) |
+| `scope`      | `id`                                                  | Variables in the kept session                      |
+| `imports`    | `id`, `source`, `line`                                | Top-level `use` statements visible at `line`       |
+| `modelHints` | `id`                                                  | IDE stub describing each model's columns           |
+| `log`        | `id`                                                  | Last 200 lines of the newest `storage/logs` file   |
+| `ping`       | `id`                                                  | Liveness; the reply repeats the handshake          |
+| `shutdown`   | —                                                     | Graceful exit                                      |
+
+`mode` is `statements` (split into top-level statements, one card each) or `file` (one
+card). `rollback: true` wraps the run in a transaction on the default database
+connection and rolls it back, including nested transactions.
 
 ## Frames (worker → extension)
 
-| Frame       | Fields                                                                            | Notes                                     |
-| ----------- | --------------------------------------------------------------------------------- | ----------------------------------------- |
-| `ready`     | `php`, `laravel`, `env`, `basePath`, `pid`                                        | Sent once after Laravel boots             |
-| `output`    | `id`, `text`, `stmt`, `line`                                                      | `echo`, warnings, PsySH text              |
-| `dump`      | `id`, `html`, `stmt`, `line`                                                      | Streaming `dump()` output                 |
-| `value`     | `id`, `html`, `stmt`, `line`                                                      | Statement value, rendered with HtmlDumper |
-| `error`     | `id`, `stmt`, `line`, `errorClass`, `message`, `file`, `errorLine`, `trace`, `ms` | Statement failed; execution halts         |
-| `statement` | `id`, `stmt`, `line`, `ok`, `ms`, `memory`, `exit?`, `queries?`                   | Finalizes one card                        |
-| `result`    | `id`, `ok`, `failed`, `statements`, `ms`, `memory`                                | Terminal frame for a run                  |
-| `scope`     | `id`, `vars[]`                                                                    | `{ name, html }` entries, capped at 50    |
-| `pong`      | `id`                                                                              | Reply to `ping`                           |
-| `fatal`     | `message`                                                                         | Boot failure or worker crash              |
+| Frame         | Fields                                                                                                   | Notes                                         |
+| ------------- | -------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| `ready`       | `protocol`, `php`, `framework`, `laravel`, `psysh`, `env`, `basePath`, `pid`, `capabilities`             | Handshake after boot                          |
+| `output`      | `id`, `text`, `stmt`, `line`                                                                             | `echo` and PsySH text                         |
+| `dump`        | `id`, `html`, `short`, `stmt`, `line`, views                                                             | Each `dump()` argument                        |
+| `value`       | `id`, `html`, `short`, `stmt`, `line`, views                                                             | A statement's returned value                  |
+| `inline`      | `id`, `stmt`, `line`, `text`, `html`                                                                     | Value requested by a trailing `//?`           |
+| `error`       | `id`, `stmt`, `line`, `errorClass`, `message`, `scratchLine`, `file`, `errorLine`, `frames[]`, `ms`      | A statement failed; the run stops             |
+| `statement`   | `id`, `stmt`, `line`, `endLine`, `ok`, `ms`, `memory`, `short?`, `exit?`, `import?`, `queries[]`, `sql`  | Finalises one card                            |
+| `scope`       | `id`, `vars[]`, `truncated?`                                                                             | Sent before `result` with the run's variables |
+| `result`      | `id`, `ok`, `failed`, `statements`, `ms`, `memory`, `rolledBack?`, `ended?`, `stopped?`, `sessionReset?` | Last frame of a run                           |
+| `pong`        | `id` + the handshake fields                                                                              | Reply to `ping`                               |
+| `reset`       | `id`, `ok`                                                                                               | Reply to `reset`                              |
+| `imports`     | `id`, `statements[]`                                                                                     | Reply to `imports`                            |
+| `modelHints`  | `id`, `php`, `count`, `skipped[]`                                                                        | Reply to `modelHints`                         |
+| `log`         | `id`, `path`, `lines`                                                                                    | Reply to `log`                                |
+| `unsupported` | `id`, `request`                                                                                          | Unknown request type                          |
+| `fatal`       | `message`                                                                                                | The worker could not boot                     |
 
-`queries` entries are `{ sql, bindings: string[], time: number|null }`, captured with
-`DB::listen` between statement boundaries (max 50).
+`capabilities` is `{ fork, parser, database }`. `framework` is `laravel`, `composer` or
+`custom`. `short` is a one-line summary used for inline editor results and run
+comparison.
+
+**Views** on `dump` and `value` frames are optional and bounded:
+
+- `table`: up to 500 rows and 30 columns for lists of arrays, Arrayables or objects.
+- `preview`: up to 200 KB of HTML from a Mailable, an HTML HTTP response, an Htmlable,
+  or a string that starts with an HTML tag. Shown in a sandboxed iframe.
+- `model`: an Eloquent model card with class, key, table, attributes (value, type,
+  cast, hidden, dirty), loaded relations and unsaved changes.
+- `copy`: `json` and `php` (short array syntax) renderings, each up to 200 KB.
+
+**Errors** carry `frames[]` of `{ file, line, call, kind }` where `kind` is `scratch`,
+`app`, `vendor` or `internal`. PsySH, php-parser and OpenTinker frames are removed.
+Frames in eval'd code map to `scratchLine`, the statement's line in the scratch file
+(PsySH pretty-prints code before running it, so finer positions are not reliable).
+
+**SQL**: `queries[]` lists up to 100 `{ sql, bindings, time }` per statement. `sql` is
+`{ total, time, repeated[] }`, where `repeated` lists query shapes that ran three or
+more times, a likely N+1.
 
 ## Execution semantics
 
-- `use` statements are executed on their own and persist through PsySH's
-  `UseStatementPass`; they do not produce cards.
-- Statement splitting falls back to executing the whole snippet as one statement when
-  the tokenizer sees constructs it cannot split safely (alternative syntax, inline
-  HTML, `declare`, `namespace`, `<?=`). A note is emitted as an `output` frame.
-- A thrown error stops the run; the `result` frame has `failed: true`.
-- PsySH's `NoReturnValue` marker is suppressed, so statements without a value produce
-  no `value` frame.
+- Statements are split with the app's own php-parser (a PsySH dependency), so every PHP
+  construct splits correctly and a syntax error is reported with its line before
+  anything runs. A final expression without a semicolon is accepted, as in PsySH.
+  Files containing `namespace`, `declare`, inline HTML or `__halt_compiler` run as one
+  card. A tokenizer fallback is used only if php-parser is missing.
+- `use` statements run on their own and produce no card unless they fail.
+- `dd()` in the scratch file dumps each argument and ends the run cleanly
+  (`ended: 'dd'`). `exit`/`die` in the scratch file are rewritten the same way.
+  `exit()` in app or vendor code ends a fresh run with `ended: 'exit'`.
+- Kept sessions tolerate re-declared imports: PsySH 0.12.22+ rejects a second `use`
+  of an alias, so the worker drops imports the session already has with the same
+  target. Changing what an alias points to needs a fresh run or a reset.
+- A selection or line from a regular PHP file can carry `imports` extracted from that
+  file (top-level `use` statements only, excluding trait uses and closure captures).
 
-## Code rewriting
+## Worker source
 
-The worker rewrites two language constructs before evaluation so they cannot terminate
-the process:
-
-- `dd(...)` (including `\dd(...)`) → `dump(...)`
-- `exit` / `die`, with or without an expression → `throw new \OpenTinker\ExitCalledException(...)`
-
-`<?php` and `?>` tags are stripped.
-
-## Transports
-
-The protocol is transport-agnostic. Current implementations:
-
-- `docker compose exec -T <service> php /tmp/opentinker/worker.php --base-path=<dir>`
-- `php <storage>/worker.php --base-path=<workspace>`
-
-WSL transport requirements and path translation are described in
-[wsl-support.md](wsl-support.md).
+The worker is written as separate classes in [`worker/src`](../worker/src) plus
+[`worker/main.php`](../worker/main.php). `scripts/build-worker.mjs` concatenates them
+into `dist/worker.php`, one braced `namespace OpenTinker { … }` block per file, which
+the extension uploads to each runtime. Classes that extend host-app classes are
+declared in `main.php` after the autoloader loads.

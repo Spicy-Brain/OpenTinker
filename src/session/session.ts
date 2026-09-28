@@ -1,11 +1,25 @@
 import type { ChildProcess } from 'node:child_process';
 import {
     LineDecoder,
+    PROTOCOL_VERSION,
+    RESPONSE_TYPES,
     encodeRequest,
     isWorkerFrame,
-    type ExecutionMode,
+    stripAnsi,
+    type Capabilities,
+    type ExecRequest,
+    type ImportsFrame,
+    type LogFrame,
+    type ModelHintsFrame,
+    type PongFrame,
+    type ReadyFrame,
+    type ResetFrame,
+    type ResultFrame,
+    type ScopeFrame,
+    type SimpleRequestType,
     type WorkerFrame,
-} from './protocol';
+    type WorkerRequest,
+} from '../shared/protocol';
 import type { Transport } from './transport';
 
 export type SessionStatus = 'stopped' | 'starting' | 'ready';
@@ -16,11 +30,20 @@ export interface SessionEvents {
 }
 
 interface PendingRequest {
+    /** The frame type that answers this request (a run also sends scope frames). */
+    expects: WorkerFrame['type'];
     resolve: (frame: WorkerFrame) => void;
     reject: (error: Error) => void;
-    timer: NodeJS.Timeout;
+    timer?: NodeJS.Timeout;
 }
 
+const START_TIMEOUT_MS = 30000;
+const REQUEST_TIMEOUT_MS = 30000;
+
+/**
+ * One worker process for one target. The worker boots the app once; runs are
+ * forked from it (fresh sessions) or sent to its kept-session child.
+ */
 export class TinkerSession {
     private child?: ChildProcess;
     private readonly decoder = new LineDecoder();
@@ -29,6 +52,7 @@ export class TinkerSession {
     private startPromise?: Promise<void>;
     private ready = false;
     private disposed = false;
+    private lastReady?: ReadyFrame;
     private readyWaiter?: {
         resolve: () => void;
         reject: (error: Error) => void;
@@ -38,7 +62,6 @@ export class TinkerSession {
     constructor(
         private readonly transport: Transport,
         private readonly events: SessionEvents,
-        private readonly timeoutMs: number,
     ) {}
 
     get isReady(): boolean {
@@ -49,54 +72,145 @@ export class TinkerSession {
         return this.transport.label;
     }
 
+    get readyInfo(): ReadyFrame | undefined {
+        return this.lastReady;
+    }
+
+    get capabilities(): Capabilities {
+        return this.lastReady?.capabilities ?? { fork: false, parser: false, database: false };
+    }
+
+    nextId(prefix: string): string {
+        return `${prefix}${++this.sequence}`;
+    }
+
     async ensureStarted(): Promise<void> {
-        if (this.disposed) {
-            throw new Error('Session has been disposed');
-        }
-        if (this.ready && this.child && this.child.exitCode === null) {
-            return;
-        }
-        if (!this.startPromise) {
-            this.startPromise = this.start().finally(() => {
-                this.startPromise = undefined;
-            });
-        }
+        if (this.disposed) throw new Error('Session has been disposed');
+        if (this.ready && this.child && this.child.exitCode === null) return;
+        this.startPromise ??= this.start().finally(() => {
+            this.startPromise = undefined;
+        });
         return this.startPromise;
     }
 
-    async exec(code: string, mode: ExecutionMode = 'statements'): Promise<void> {
+    /** Runs code; resolves with the result frame. Timeouts are the caller's job. */
+    async exec(request: Omit<ExecRequest, 'type'>): Promise<ResultFrame> {
         await this.ensureStarted();
-        const id = `r${++this.sequence}`;
-        const settled = this.waitFor(id);
-        this.child?.stdin?.write(encodeRequest({ id, type: 'exec', code, mode }));
-        await settled;
+        const settled = this.waitFor(request.id, 'result', 0);
+        this.write({ type: 'exec', ...request });
+        const frame = await settled;
+        if (frame.type !== 'result') throw new Error('Unexpected response to a run');
+        return frame;
+    }
+
+    /** Asks the worker to stop a running fresh run; the worker stays warm. */
+    cancel(runId: string): void {
+        if (this.child?.stdin?.writable) this.write({ type: 'cancel', id: runId });
+    }
+
+    async imports(source: string, line: number): Promise<ImportsFrame> {
+        await this.ensureStarted();
+        const id = this.nextId('i');
+        const settled = this.waitFor(id, 'imports');
+        this.write({ id, type: 'imports', source, line });
+        return this.expect<ImportsFrame>(await settled, 'imports');
+    }
+
+    async ping(): Promise<PongFrame> {
+        return this.expect<PongFrame>(await this.simple('ping'), 'pong');
+    }
+
+    async readLog(): Promise<LogFrame> {
+        return this.expect<LogFrame>(await this.simple('log'), 'log');
+    }
+
+    async scope(): Promise<ScopeFrame> {
+        return this.expect<ScopeFrame>(await this.simple('scope'), 'scope');
+    }
+
+    async modelHints(): Promise<ModelHintsFrame> {
+        return this.expect<ModelHintsFrame>(await this.simple('modelHints', 120000), 'modelHints');
+    }
+
+    /** Clears the kept session. Returns false when the worker cannot fork. */
+    async resetKeptSession(): Promise<boolean> {
+        if (!this.ready) return true;
+        const frame = this.expect<ResetFrame>(await this.simple('reset'), 'reset');
+        return frame.ok;
+    }
+
+    /** Hard stop: kills the worker process. */
+    stop(reason = 'Run stopped by user'): void {
+        this.ready = false;
+        this.lastReady = undefined;
+        this.kill();
+        this.child = undefined;
+        this.failStart(new Error(reason));
+        this.resetPending(new Error(reason));
+        this.events.onStatus('stopped');
     }
 
     async restart(): Promise<void> {
         this.kill();
+        this.child = undefined;
+        this.ready = false;
+        this.lastReady = undefined;
+        this.failStart(new Error('Session restarted'));
         this.resetPending(new Error('Session restarted'));
+        if (this.startPromise) await this.startPromise.catch(() => undefined);
         await this.ensureStarted();
     }
 
     dispose(): void {
         this.disposed = true;
-        this.resetPending(new Error('Session disposed'));
-        if (this.child?.stdin?.writable) {
-            this.child.stdin.write(encodeRequest({ type: 'shutdown' }));
-        }
+        this.resetPending(new Error('Session closed'));
+        if (this.child?.stdin?.writable) this.write({ type: 'shutdown' });
         this.kill(1500);
         this.events.onStatus('stopped');
+    }
+
+    private async simple(
+        type: SimpleRequestType,
+        timeoutMs = REQUEST_TIMEOUT_MS,
+    ): Promise<WorkerFrame> {
+        await this.ensureStarted();
+        const id = this.nextId(type[0]);
+        const expects: Record<SimpleRequestType, WorkerFrame['type']> = {
+            ping: 'pong',
+            log: 'log',
+            scope: 'scope',
+            reset: 'reset',
+            modelHints: 'modelHints',
+        };
+        const settled = this.waitFor(id, expects[type], timeoutMs);
+        this.write({ id, type });
+        return settled;
+    }
+
+    private expect<T extends WorkerFrame>(frame: WorkerFrame, type: T['type']): T {
+        if (frame.type === 'unsupported') {
+            throw new Error('This worker does not support that request. Restart the session.');
+        }
+        if (frame.type !== type) throw new Error(`Unexpected ${frame.type} response`);
+        return frame as T;
+    }
+
+    private write(request: WorkerRequest): void {
+        this.child?.stdin?.write(encodeRequest(request));
     }
 
     private async start(): Promise<void> {
         this.events.onStatus('starting');
         await this.transport.ensureWorker();
+        if (this.disposed) throw new Error('Session closed during startup');
 
         const child = this.transport.spawn();
         this.child = child;
         this.decoder.reset();
         child.stdout?.setEncoding('utf8');
-        child.stdout?.on('data', (chunk: string) => this.handleChunk(chunk));
+        child.stdout?.on('data', (chunk: string) => {
+            if (this.child === child) this.handleChunk(chunk);
+        });
 
         let stderr = '';
         child.stderr?.setEncoding('utf8');
@@ -107,22 +221,20 @@ export class TinkerSession {
         let exited = false;
         child.on('error', (error) => {
             exited = true;
-            this.handleExit(error.message);
+            this.handleExit(error.message, child);
         });
         child.on('close', (code) => {
-            if (exited) {
-                return;
-            }
+            if (exited) return;
             exited = true;
-            this.handleExit(stderr.trim() || `worker exited with code ${code}`);
+            this.handleExit(stripAnsi(stderr).trim() || `worker exited with code ${code}`, child);
         });
 
         await new Promise<void>((resolve, reject) => {
             const timer = setTimeout(() => {
                 this.readyWaiter = undefined;
                 this.kill();
-                reject(new Error('Timed out waiting for the worker to start'));
-            }, 15000);
+                reject(new Error('Timed out waiting for the app to boot'));
+            }, START_TIMEOUT_MS);
 
             this.readyWaiter = { resolve, reject, timer };
         });
@@ -130,60 +242,65 @@ export class TinkerSession {
 
     private handleChunk(chunk: string): void {
         for (const line of this.decoder.push(chunk)) {
-            if (line.trim() === '') {
-                continue;
-            }
+            if (line.trim() === '') continue;
 
             let parsed: unknown;
             try {
                 parsed = JSON.parse(line);
             } catch {
-                this.events.onFrame({ type: 'output', text: line + '\n' });
+                // Stray process output (a framework renderer, fwrite(STDOUT)).
+                this.events.onFrame({ type: 'output', id: null, text: stripAnsi(line) + '\n' });
                 continue;
             }
 
-            if (!isWorkerFrame(parsed)) {
-                continue;
-            }
-
+            if (!isWorkerFrame(parsed)) continue;
             const frame = parsed;
-            this.events.onFrame(frame);
 
             if (frame.type === 'ready') {
+                if (frame.protocol !== PROTOCOL_VERSION) {
+                    this.failStart(
+                        new Error(
+                            `The worker speaks protocol ${frame.protocol ?? 1}, but this extension needs ${PROTOCOL_VERSION}. Reload the window to update it.`,
+                        ),
+                    );
+                    this.kill();
+                    continue;
+                }
                 this.ready = true;
+                this.lastReady = frame;
                 if (this.readyWaiter) {
                     clearTimeout(this.readyWaiter.timer);
                     this.readyWaiter.resolve();
                     this.readyWaiter = undefined;
                 }
+                this.events.onFrame(frame);
                 this.events.onStatus('ready');
+                continue;
             }
 
-            if (frame.type === 'fatal') {
-                this.failStart(new Error(frame.message));
-            }
+            this.events.onFrame(frame);
 
-            // Per-statement errors render as cards; only result/pong settle a run.
-            if ((frame.type === 'result' || frame.type === 'pong') && 'id' in frame) {
+            if (frame.type === 'fatal') this.failStart(new Error(frame.message));
+
+            if (RESPONSE_TYPES.has(frame.type) && 'id' in frame && typeof frame.id === 'string') {
                 const pending = this.pending.get(frame.id);
-                if (pending) {
+                if (pending && (frame.type === pending.expects || frame.type === 'unsupported')) {
                     this.pending.delete(frame.id);
-                    clearTimeout(pending.timer);
+                    if (pending.timer) clearTimeout(pending.timer);
                     pending.resolve(frame);
                 }
             }
         }
     }
 
-    private handleExit(detail: string): void {
+    private handleExit(detail: string, source: ChildProcess): void {
+        if (this.child !== source) return;
         this.ready = false;
+        this.lastReady = undefined;
         this.child = undefined;
         this.failStart(new Error(detail));
         this.resetPending(new Error(detail));
-        if (!this.disposed) {
-            this.events.onStatus('stopped', detail);
-            this.events.onFrame({ type: 'fatal', message: detail });
-        }
+        if (!this.disposed) this.events.onStatus('stopped', detail);
     }
 
     private failStart(error: Error): void {
@@ -194,21 +311,26 @@ export class TinkerSession {
         }
     }
 
-    private waitFor(id: string): Promise<WorkerFrame> {
+    private waitFor(
+        id: string,
+        expects: WorkerFrame['type'],
+        timeoutMs = REQUEST_TIMEOUT_MS,
+    ): Promise<WorkerFrame> {
         return new Promise<WorkerFrame>((resolve, reject) => {
-            const timer = setTimeout(() => {
-                this.pending.delete(id);
-                this.kill();
-                reject(new Error(`Snippet timed out after ${this.timeoutMs}ms`));
-            }, this.timeoutMs);
-
-            this.pending.set(id, { resolve, reject, timer });
+            const timer =
+                timeoutMs > 0
+                    ? setTimeout(() => {
+                          this.pending.delete(id);
+                          reject(new Error('The worker did not respond in time'));
+                      }, timeoutMs)
+                    : undefined;
+            this.pending.set(id, { expects, resolve, reject, timer });
         });
     }
 
     private resetPending(error: Error): void {
         for (const [id, pending] of this.pending) {
-            clearTimeout(pending.timer);
+            if (pending.timer) clearTimeout(pending.timer);
             pending.reject(error);
             this.pending.delete(id);
         }
@@ -216,13 +338,8 @@ export class TinkerSession {
 
     private kill(graceMs = 0): void {
         const child = this.child;
-        if (!child || child.exitCode !== null) {
-            return;
-        }
-        if (graceMs > 0) {
-            setTimeout(() => child.kill('SIGKILL'), graceMs).unref?.();
-        } else {
-            child.kill('SIGKILL');
-        }
+        if (!child || child.exitCode !== null) return;
+        if (graceMs > 0) setTimeout(() => child.kill('SIGKILL'), graceMs).unref?.();
+        else child.kill('SIGKILL');
     }
 }
