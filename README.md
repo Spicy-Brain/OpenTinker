@@ -1,68 +1,107 @@
 # OpenTinker
 
-A Tinkerwell-style scratchpad for Laravel and PHP inside VS Code. Write code in a
-scratch file, press **Cmd/Ctrl+Enter**, and see what every line did: values at the end
-of each line, and a results panel with model cards, tables, dumps, SQL and errors.
-Code runs in your app's real runtime: Docker, local PHP or SSH.
+A scratchpad for Laravel and PHP inside VS Code. Write code in a scratch file, press
+**Cmd/Ctrl+Enter**, and see what every line did: its value at the end of the line, and a
+results panel with model cards, tables, dumps, SQL and errors. Code runs in your app's
+real runtime: Docker, local PHP or SSH.
 
-> Status: 0.3.0, not yet published. See the [roadmap](docs/roadmap.md).
+![A scratch file with results at the end of each line, and the results panel showing a model card, SQL and an N+1 warning](docs/images/hero.png)
+
+> OpenTinker is in preview. Please [report anything that doesn't work](https://github.com/Spicy-Brain/OpenTinker/issues).
+
+## Features
+
+- **Fresh runs by default.** Every run starts from a freshly booted app, so re-running
+  a file never trips over leftover state. Laravel boots once and each run forks from it,
+  so a run typically takes 10–40 ms. Switch to **keep session** for a REPL.
+- **Results per line.** Values at the end of each line, and a card per statement with
+  timing, SQL and whether the result changed since the last run.
+- **Eloquent model cards, tables, dumps and previews** of mailables, responses and HTML.
+- **SQL insight** with bindings, timings and N+1 warnings.
+- **Safe production runs.** Production targets turn red, and runs ask first when the code
+  looks like it writes data. Database changes can be rolled back after each run.
+- **Fake side effects.** Mail, notifications, jobs and Laravel HTTP client calls can be
+  faked, and each result card shows what it would have sent, with a preview of each
+  email.
+- **Your real runtime.** Docker Compose (Sail included), `docker exec`, local PHP (Herd,
+  Valet, Homebrew) or SSH, detected automatically on the first run.
+- **Run code from anywhere:** a selection in any PHP file, a model ("Tinker this model"),
+  a method, the clipboard, or a shared snippet with inputs.
+
+## Requirements
+
+- VS Code 1.90 or later. OpenTinker is also on Open VSX for Cursor, Windsurf and
+  VSCodium.
+- A PHP project with its Composer dependencies installed, using **PHP 8.1 or later**
+  where the app runs. Laravel 10–13 and plain Composer projects are tested.
+- **PsySH** in the project. Laravel apps have it through `laravel/tinker`; otherwise run
+  `composer require --dev psy/psysh`.
+- For fast fresh runs, the `pcntl` and `posix` PHP extensions. Most Linux and macOS PHP
+  builds have them. The official `php` Docker images need
+  `docker-php-ext-install pcntl`. Without them, OpenTinker restarts PHP for each fresh
+  run instead, which is slower.
+- For Docker targets, the `docker` CLI with Compose v2. For SSH targets, the `ssh`
+  command with key or agent authentication.
+
+OpenTinker runs on macOS and Linux. On Windows, use it in a WSL window (Remote - WSL);
+native Windows PHP is experimental.
 
 ## Getting started
 
 1. Open your project and run **OpenTinker: Open Tinker Window** (the flask icon in the
    activity bar, or the command palette). It opens a scratch file on the left and
    results on the right.
-2. Write PHP and press **Cmd+Enter** (macOS) or **Ctrl+Enter**, or click **▶ Run**:
-   the orange button at the left of the status bar, the button at the top right of the
-   editor, or the Run button in the results panel.
+2. Write PHP and press **Cmd+Enter** (macOS) or **Ctrl+Enter**, or click **▶ Run** in
+   the status bar, the editor toolbar or the results panel.
 
 The first run finds where your app runs by itself. It reads your Compose file
 (including Sail, and projects that mount sub-folders such as `./app`), checks which
-services are running, and falls back to local PHP (Herd, Valet or Homebrew). It only
-asks when there is more than one real option. The chosen target shows in the status
-bar; click it to change.
-
-```
-.tinker/scratch-1.php                         OpenTinker · scratch-1.php
-┌──────────────────────────────────────┐     ┌───────────────────────────────────┐
-│ ▶ Run  ⌂ app · local  Fresh  Rollback│     │ LOCAL  app ▾  Fresh session       │
-│ use App\Models\User;                 │     │ Line 3  $user = User::first();    │
-│ $user = User::first();  = User #1    │     │   User #1 · users                 │
-│ $user->posts()->count(); = 12        │     │   name   Ada Lovelace             │
-│                                      │     │   SQL 1 query · 0.4 ms            │
-└──────────────────────────────────────┘     └───────────────────────────────────┘
-```
+services are running, and falls back to local PHP. It only asks when there is more
+than one real option. The chosen target shows in the status bar; click it to change.
 
 ## How runs work
 
-- **Fresh by default.** Every run starts from a freshly booted app, like running a
-  script. Nothing carries over: variables, imports, functions or classes you declare,
-  or changes to the service container. Laravel boots once and each run forks from it,
-  so a run typically takes 10–40 ms.
+- **Fresh by default.** Nothing carries over between runs: variables, imports,
+  functions or classes you declare, or changes to the service container.
 - **Keep session** (status bar, CodeLens or panel toggle) makes variables carry over
   between runs, like `artisan tinker`. **Reset session** clears it instantly.
 - **Stop** ends a run right away, and the app stays booted for the next run.
-- **Roll back database changes** (toggle) runs code in a transaction and undoes it,
-  so you can try `update()` or `delete()` safely. Mail, queues, files and external
-  calls are not rolled back.
+- **Roll back database changes** (toggle) runs code in a transaction and undoes it, so
+  you can try `update()` or `delete()` safely. Mail, queues, files and external calls
+  are not rolled back.
+- **Fake side effects** (toggle, Laravel only) captures mail instead of sending it, and
+  swaps in Laravel's fakes for notifications, queued and dispatched jobs, and requests
+  made with Laravel's `Http` client. Nothing is sent; each statement's card lists what
+  it would have sent. Events, files and cache stay real, and queued listeners are
+  captured as jobs. SDKs that make their own HTTP requests (payment providers, for
+  example) are not faked. Together with rollback, you can try a whole workflow without
+  touching anything outside the run. If a target can't fake them, OpenTinker won't run
+  with the toggle on.
 - `dd()` shows its values and ends the run cleanly. So do `exit()` and `die`, including
   when they come from app code.
 
 ## Results
 
-- **Inline results** at the end of each line: the value it returned, `dump()`
-  output, or the error in red. Hover for the full text. Edits move or clear them.
-- **Result cards** in source order, one per statement. Each card shows its timing,
-  query count and whether the result changed since the last run of the file.
+- **Inline results** at the end of each line: the value it returned, `dump()` output,
+  or the error in red. Hover for the full text. Edits move or clear them.
+- **PHP warnings and notices** (an undefined variable or array key) show in the results;
+  deprecations don't.
+- **Lazy values are left alone.** Cursors, lazy collections and generators show their
+  type without being run or consumed, so `User::cursor()` doesn't query every row just
+  to display it.
+- **Result cards** in source order, one per statement, with timing, query count and a
+  marker when the result changed since the last run of the file.
 - **Eloquent models** render as cards: attributes with casts, hidden fields, loaded
-  relations and unsaved changes. Switch to the raw dump at any time.
+  relations and unsaved changes. The raw dump is always one click away.
 - **Tables** for collections and lists of arrays, with filtering.
 - **Copy** any value as text, JSON, a PHP array, CSV or a Markdown table.
-- **SQL** per statement with bindings and timings. Repeated query shapes are flagged
-  as a possible N+1.
+- **SQL** per statement with bindings and timings. Repeated query shapes are flagged as
+  a possible N+1.
 - **Errors** lead with the message and your scratch line. App frames open in the
   editor; vendor frames are collapsed and PsySH/OpenTinker internals are hidden.
-- **HTML, mailables and HTTP responses** preview in a sandboxed frame.
+- **Mailables, HTTP responses and HTML** preview in a sandboxed frame with scripts
+  off. Remote images stay blocked until you load them, so previewing an email doesn't
+  trigger its tracking pixels.
 - **Variables** tab: what the last run left behind, or the kept session's variables.
 - End a line with `//?` to show that value inline even when it is not the last
   statement.
@@ -77,8 +116,8 @@ Results open beside the scratch file by default. Set `opentinker.results.locatio
   rest of it.
 - **Tinker this model** (CodeLens on Eloquent models) opens a scratch file that loads
   the model and runs it.
-- **Run method / Run function** (CodeLens) calls public methods and functions that
-  take no required arguments.
+- **Run method / Run function** (CodeLens) calls public methods and functions that take
+  no required arguments.
 - **OpenTinker: Run Clipboard** runs whatever you copied.
 - **Snippets** are PHP files in `.tinker/snippets/` with a small header, so a team can
   commit and share them. Inputs such as `{{userId:number}}`, `{{email}}`,
@@ -91,6 +130,8 @@ container**, **local PHP**, or an **SSH** server. Each target has a name, the pr
 path inside the runtime, an optional PHP binary and bootstrap, and a declared
 environment. Manage targets with **OpenTinker: Choose Target…**; the gear opens a
 single form with a **Test connection** button.
+
+![The target form, with Docker Compose, Docker container, local PHP and SSH runtimes](docs/images/targets.png)
 
 Scratch files can remember their own target (**Choose Target for This File…**), so a
 production scratch and a local scratch can be open side by side. The CodeLens on line
@@ -107,29 +148,34 @@ is declared as production. Then:
   updates, deletes, jobs, mail, Artisan commands, cache and file writes). Set
   `opentinker.production.confirm` to `always` or `never` to change this.
 
+![A production scratch file with a red PRODUCTION band, and a dialog asking before a run that updates records](docs/images/production.png)
+
+The check is a heuristic that errs towards asking, not a sandbox. Code you confirm runs
+with your app's full permissions.
+
 ### SSH
 
 OpenTinker uses the system `ssh` command with key or agent authentication and strict
 host key checking. It never accepts a new host key automatically, so connect once in a
 terminal first. It uploads its worker to a private folder under the remote user's home.
-SSH details can be imported from a compatible OpenVSDB extension; imported targets are
-re-checked against OpenVSDB before every run. A database tunnel host is often only a
-bastion, so set the host that actually runs the app.
+SSH details can be imported from
+[OpenVSDB](https://marketplace.visualstudio.com/items?itemName=snitzle.openvsdb);
+imported targets are re-checked against OpenVSDB before every run. A database tunnel
+host is often only a bastion, so set the host that actually runs the app.
 
 ### Other frameworks and plain PHP
 
 The worker boots Laravel when `bootstrap/app.php` exists and otherwise loads Composer's
 autoloader. For other frameworks, set the target's (or `opentinker.bootstrap`)
-bootstrap to a PHP file that boots your app. PsySH must be installed
-(`composer require --dev psy/psysh`; Laravel apps get it from `laravel/tinker`).
+bootstrap to a PHP file that boots your app.
 
 ## Autocomplete in scratch files
 
 Scratch files are ordinary PHP files, so Intelephense and other PHP extensions complete
-them. **OpenTinker: Generate Model Hints** writes `.tinker/_ide_helper_models.php`
-from your database schema, so `$user->` completes real columns. It uses the same
-approach as `barryvdh/laravel-ide-helper`. **Check Setup** warns if Intelephense
-excludes the scratch folder.
+them. **OpenTinker: Generate Model Hints** writes `.tinker/_ide_helper_models.php` from
+your database schema, so `$user->` completes real columns. It uses the same approach as
+`barryvdh/laravel-ide-helper`. **Check Setup** warns if Intelephense excludes the
+scratch folder.
 
 ## Commands
 
@@ -143,6 +189,7 @@ excludes the scratch folder.
 | Choose Target… / … for This File     | Pick, detect, add or edit targets                     |
 | Toggle Fresh / Keep Session          | Switch how runs share state                           |
 | Toggle Database Rollback             | Roll back database changes after each run             |
+| Toggle Fake Side Effects             | Fake mail, notifications, jobs and HTTP calls         |
 | Reset Kept Session                   | Clear the kept session's variables                    |
 | New Scratch File / Open Scratch File | Scratch files live in `.tinker/`                      |
 | Save Snippet / Run Snippet…          | Shareable snippets in `.tinker/snippets/`             |
@@ -150,6 +197,7 @@ excludes the scratch folder.
 | Generate Model Hints                 | Column autocomplete for Eloquent models               |
 | Follow Laravel Log                   | Tail the newest log file in an output channel         |
 | Check Setup                          | Test the target and look for common problems          |
+| Get Started                          | Open the walkthrough                                  |
 
 ## Settings
 
@@ -157,9 +205,12 @@ excludes the scratch folder.
 | ----------------------------------- | ------------ | ------------------------------------------------------------ |
 | `opentinker.session.mode`           | `fresh`      | `fresh`: each run starts clean. `keep`: variables carry over |
 | `opentinker.database.rollback`      | `false`      | Roll back database changes after each run                    |
+| `opentinker.fakeSideEffects`        | `false`      | Fake mail, notifications, jobs and HTTP calls (Laravel)      |
 | `opentinker.production.confirm`     | `writes`     | When to confirm production runs: `writes`, `always`, `never` |
 | `opentinker.results.location`       | `beside`     | `beside` the scratch file or in the bottom `panel`           |
 | `opentinker.inlineResults`          | `true`       | Show results at the end of each line                         |
+| `opentinker.codeLens.runMethods`    | `true`       | Show Run method / Run function on callable methods           |
+| `opentinker.codeLens.tinkerModel`   | `true`       | Show Tinker this model on Eloquent models                    |
 | `opentinker.bootstrap`              | `auto`       | `auto`, `laravel`, `composer` or a bootstrap file path       |
 | `opentinker.timeoutMs`              | `30000`      | Stop runs after this long (0 disables)                       |
 | `opentinker.executionMode`          | `statements` | A card per statement, or one card for the whole file         |
@@ -190,40 +241,36 @@ The Xdebug extension's "Run PHP File" button runs host PHP without your app. In 
 files, OpenTinker adds its own Run button to the editor toolbar and is also the first
 entry in the editor's run menu.
 
-## Development
+## Privacy and security
 
-```bash
-npm install
-npm run watch        # extension, results front end and dist/worker.php
-# press F5 to launch the Extension Development Host
-```
+- OpenTinker runs arbitrary PHP in your application, with the same power as
+  `php artisan tinker`. It only works in trusted workspaces and never runs code without
+  an explicit action.
+- It has no telemetry and makes no network requests of its own. It talks only to the
+  runtime you choose: a local PHP process, `docker`, or `ssh`.
+- Targets and run history (code and run details) are kept in VS Code's workspace
+  storage on your machine. Results stay in memory unless you turn on
+  `opentinker.history.persistResults`; turning it off again deletes them.
+- Scratch files live in `.tinker/` in your project. OpenTinker offers to add it to
+  `.gitignore`, while letting shared snippets in `.tinker/snippets/` be committed.
 
-| Script                                                      | What it checks                                   |
-| ----------------------------------------------------------- | ------------------------------------------------ |
-| `npm run typecheck`, `npm run lint`, `npm run format:check` | Types (extension and front end), lint, format    |
-| `npm test`                                                  | Unit tests, including the front end in happy-dom |
-| `php test/workerFeatures.php`                               | Worker transforms without an app                 |
-| `php test/integration/worker.php --base-path=/path/to/app`  | The real worker against an app                   |
-| `node test/e2e/run.mjs /path/to/throwaway-app --reset`      | A real VS Code driving the extension             |
+Please report security issues privately; see [SECURITY.md](SECURITY.md).
 
-`test/integration/worker.php` also accepts `--command="docker compose exec -T app php
-/tmp/worker.php --base-path=/var/www"` and `--no-writes` for a real database. The
-end-to-end suite writes settings, scratch files and a rolled-back row into the app it
-is given, so only point it at a throwaway app.
+## Known limitations
 
-Code layout: [`src/run`](src/run) holds the run controller (states, stop, timeouts,
-production guard, comparison), [`src/targets`](src/targets) targets and detection,
-[`src/session`](src/session) the worker session and transports, [`src/ui`](src/ui) the
-VS Code surfaces, [`src/webview/results`](src/webview/results) the results front end,
-and [`worker/`](worker) the PHP worker. The [protocol](docs/protocol.md) connects them.
+- One project per window: in a multi-root workspace OpenTinker uses the first folder
+  that contains `artisan`, else `composer.json`.
+- Rollback covers the default database connection only.
+- Without `pcntl`, fresh runs restart PHP each time and a stopped run restarts the
+  worker.
 
-## Security
+## Contributing
 
-OpenTinker runs arbitrary PHP in your application, with the same power as
-`php artisan tinker`. It refuses to run in untrusted workspaces and never runs code
-without an explicit action. Result history stays in workspace storage, and keeping
-results across reloads is off by default.
+Bug reports and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for
+how to build and test OpenTinker, and the [roadmap](docs/roadmap.md) for what's next.
 
 ## License
 
-MIT
+[MIT](LICENSE). OpenTinker is built on [PsySH](https://psysh.org). It is an independent
+project and is not affiliated with or endorsed by Laravel. Laravel is a trademark of
+Laravel Holdings Inc.

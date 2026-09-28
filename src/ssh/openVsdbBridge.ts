@@ -1,7 +1,8 @@
 import * as vscode from 'vscode';
 import { isSshEndpoint, type SshEndpoint } from './types';
 
-const OPENVSDB_ID = 'local.openvsdb';
+/** The published extension first, then local development builds. */
+const OPENVSDB_IDS = ['snitzle.openvsdb', 'local.openvsdb'];
 
 interface OpenVsdbApi {
     apiVersion: 1;
@@ -22,7 +23,9 @@ function isOpenVsdbApi(value: unknown): value is OpenVsdbApi {
 }
 
 async function getApi(): Promise<OpenVsdbApi | undefined> {
-    const extension = vscode.extensions.getExtension<unknown>(OPENVSDB_ID);
+    const extension = OPENVSDB_IDS.map((id) => vscode.extensions.getExtension<unknown>(id)).find(
+        Boolean,
+    );
     if (!extension) {
         return undefined;
     }

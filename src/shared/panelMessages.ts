@@ -18,6 +18,7 @@ export interface RunView {
     environment: string;
     sessionMode: 'fresh' | 'keep';
     rollback: boolean;
+    fake: boolean;
     at: number;
 }
 
@@ -28,6 +29,8 @@ export interface PanelContext {
     environment: string;
     sessionMode: 'fresh' | 'keep';
     rollback: boolean;
+    /** Mail, notifications, jobs and HTTP calls are faked. */
+    fake: boolean;
     state: 'idle' | 'starting' | 'running' | 'stopping';
     /** False when the runtime cannot fork, so fresh runs restart the worker. */
     fork: boolean;
@@ -51,13 +54,13 @@ export type HostMessage =
     | { kind: 'clear' };
 
 export type PanelAction =
-    | 'rerun'
     | 'run'
     | 'stop'
     | 'restartSession'
     | 'clear'
     | 'toggleMode'
     | 'toggleRollback'
+    | 'toggleFakes'
     | 'chooseTarget'
     | 'refreshScope'
     | 'newScratch';
@@ -71,13 +74,13 @@ export type PanelMessage =
     | { kind: 'save'; filename: string; content: string };
 
 const ACTIONS: PanelAction[] = [
-    'rerun',
     'run',
     'stop',
     'restartSession',
     'clear',
     'toggleMode',
     'toggleRollback',
+    'toggleFakes',
     'chooseTarget',
     'refreshScope',
     'newScratch',

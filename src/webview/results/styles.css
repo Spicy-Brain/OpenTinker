@@ -33,6 +33,23 @@ body.production header {
     display: none !important;
 }
 
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+}
+
+/* High contrast themes: outline everything that relies on a fill colour. */
+.vscode-high-contrast .tool,
+.vscode-high-contrast .pill,
+.vscode-high-contrast .card,
+.vscode-high-contrast .menu {
+    border-color: var(--vscode-contrastBorder);
+}
+
 button:focus-visible,
 input:focus-visible,
 summary:focus-visible {
@@ -97,7 +114,7 @@ header {
 .tool.primary {
     color: var(--vscode-button-foreground);
     background: var(--vscode-button-background);
-    border-color: transparent;
+    border-color: var(--vscode-button-border, transparent);
 }
 
 .tool.run {
@@ -117,7 +134,7 @@ header {
 .tool.danger {
     color: var(--vscode-button-foreground);
     background: var(--vscode-statusBarItem-errorBackground, #c72e0f);
-    border-color: transparent;
+    border-color: var(--vscode-button-border, transparent);
 }
 
 .tool:disabled {
@@ -180,6 +197,11 @@ button.pill:hover {
 .pill.mode.keep {
     color: var(--warn);
     border-color: var(--warn);
+}
+
+.pill.fakes.on {
+    color: var(--ok);
+    border-color: var(--ok);
 }
 
 .status {
@@ -473,7 +495,7 @@ pre.output {
     cursor: pointer;
 }
 
-.view-tab[aria-selected='true'] {
+.view-tab[aria-pressed='true'] {
     color: var(--vscode-foreground);
     border-color: var(--border);
     background: var(--surface);
@@ -575,6 +597,57 @@ pre.output {
 .error-actions {
     display: flex;
     justify-content: flex-end;
+}
+
+/* Side effects captured by fakes */
+.card-effects:empty {
+    display: none;
+}
+
+.badge.faked {
+    color: var(--ok);
+    border-color: var(--ok);
+}
+
+.side-effects {
+    border-top: 1px dashed var(--border);
+    padding: 4px 10px 6px;
+    font-size: 0.85em;
+}
+
+.side-effects summary {
+    cursor: pointer;
+}
+
+.side-effects-label {
+    font-weight: 600;
+    color: var(--ok);
+}
+
+.side-effect-list {
+    list-style: none;
+    margin: 4px 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.side-effect {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 6px;
+}
+
+.side-effect-summary {
+    font-family: var(--mono);
+    word-break: break-word;
+}
+
+.side-effect .preview,
+.side-effect .preview-wrap {
+    flex-basis: 100%;
 }
 
 /* SQL */
@@ -760,6 +833,11 @@ iframe.preview {
     border: 1px solid var(--border);
     border-radius: 4px;
     background: #fff;
+}
+
+.preview-note {
+    font-size: 0.85em;
+    margin-bottom: 4px;
 }
 
 /* Variables */

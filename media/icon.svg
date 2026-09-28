@@ -1,0 +1,31 @@
+<svg width="256" height="256" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- Marketplace icon source. icon.png is this file rendered at 256×256 (the
+         Marketplace needs a PNG). Re-export it after changing this file. -->
+    <defs>
+        <linearGradient id="tile" x1="0" y1="0" x2="256" y2="256" gradientUnits="userSpaceOnUse">
+            <stop offset="0" stop-color="#4F46E5" />
+            <stop offset="1" stop-color="#1E1B4B" />
+        </linearGradient>
+        <linearGradient id="liquid" x1="12" y1="15.2" x2="12" y2="20.3" gradientUnits="userSpaceOnUse">
+            <stop offset="0" stop-color="#FCD34D" />
+            <stop offset="1" stop-color="#F59E0B" />
+        </linearGradient>
+    </defs>
+    <rect width="256" height="256" rx="56" fill="url(#tile)" />
+    <!-- The activity bar flask (media/opentinker.svg), scaled up and filled. -->
+    <g transform="translate(26 33) scale(8.5)">
+        <path
+            d="M6.33 15.2h11.34l1.23 2.2a1.9 1.9 0 0 1-1.7 2.9H6.8a1.9 1.9 0 0 1-1.7-2.9z"
+            fill="url(#liquid)"
+        />
+        <circle cx="11.1" cy="13.2" r="0.8" fill="#FCD34D" />
+        <circle cx="13.1" cy="11.1" r="0.55" fill="#FCD34D" opacity="0.8" />
+        <path
+            d="M9 3h6M10 3v5.6L5.1 17.4A1.9 1.9 0 0 0 6.8 20.3h10.4a1.9 1.9 0 0 0 1.7-2.9L14 8.6V3"
+            stroke="#F8FAFC"
+            stroke-width="1.5"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+        />
+    </g>
+</svg>

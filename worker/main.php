@@ -11,8 +11,8 @@ use Throwable;
 
 /*
  * Entry point. Boots the host application once, then serves requests over
- * newline-delimited JSON on stdin/stdout. Runs execute in a forked child when
- * a fresh session is requested and pcntl is available, otherwise in-process.
+ * newline-delimited JSON on stdin/stdout. With pcntl, runs execute in forked
+ * children and never in this process; without it they run in-process.
  */
 
 \ini_set('display_errors', 'stderr');
@@ -34,7 +34,28 @@ for ($i = 1; $i < \count($argv ?? []); $i++) {
 $basePath = \rtrim((string) ($options['base-path'] ?? (\getcwd() ?: '.')), '/\\');
 $bootstrap = (string) $options['bootstrap'];
 
-$fail = static function (string $message) use ($protocol): never {
+// Anything printed while booting (a byte-order mark or stray echo in an app
+// file) is captured and forwarded as an output frame instead of landing in
+// front of the ready frame.
+$bootLevel = \ob_get_level();
+\ob_start();
+
+$flushBootOutput = static function () use ($protocol, $bootLevel): void {
+    $text = '';
+
+    while (\ob_get_level() > $bootLevel) {
+        $text = (string) \ob_get_clean() . $text;
+    }
+
+    $text = \str_replace("\u{FEFF}", '', $text);
+
+    if (\trim($text) !== '') {
+        $protocol->send(['type' => 'output', 'id' => null, 'text' => $text]);
+    }
+};
+
+$fail = static function (string $message) use ($protocol, $flushBootOutput): never {
+    $flushBootOutput();
     $protocol->send(['type' => 'fatal', 'message' => $message]);
     exit(1);
 };
@@ -81,6 +102,11 @@ if (! \class_exists(Shell::class)) {
     $fail('PsySH is not installed in this project. Run: composer require --dev psy/psysh (Laravel apps usually get it from laravel/tinker).');
 }
 
+// Deprecations raised by vendor code would flood the results panel, so runs
+// do not show them (outside a run, Laravel's handler still logs them).
+$quietLevels = \E_DEPRECATED | \E_USER_DEPRECATED;
+\error_reporting(\error_reporting() & ~$quietLevels);
+
 /**
  * Routes PsySH and echo output into protocol frames instead of stdout.
  * Declared after autoloading because its parent class lives in the host app.
@@ -95,6 +121,16 @@ final class ProtocolOutput extends ShellOutput
     public function doWrite($message, $newline): void
     {
         $this->protocol->output($newline ? $message . "\n" : $message);
+    }
+
+    /**
+     * PsySH writes warnings and notices to the error output, which would be the
+     * real stderr. Keep them in the protocol. (Setting the error output to this
+     * object instead would recurse through ConsoleOutput's setters.)
+     */
+    public function getErrorOutput(): \Symfony\Component\Console\Output\OutputInterface
+    {
+        return $this;
     }
 }
 
@@ -130,11 +166,21 @@ if ($app !== null) {
     }
 }
 
-$runtimeDir = \sys_get_temp_dir() . '/opentinker-' . \substr(\sha1($basePath), 0, 12);
+// PsySH runs config.php from its config dir, so that dir must be one nobody
+// else can have prepared: a fresh private one per boot, removed on exit.
+$runtimeDir = TempDir::create(\sys_get_temp_dir()) ?? TempDir::create(__DIR__);
 
-if (! \is_dir($runtimeDir)) {
-    @\mkdir($runtimeDir, 0700, true);
+if ($runtimeDir === null) {
+    $fail('Could not create a private temporary directory in ' . \sys_get_temp_dir() . '.');
 }
+
+$workerPid = \getmypid();
+\register_shutdown_function(static function () use ($runtimeDir, $workerPid): void {
+    // Forked children inherit this handler; only the worker itself cleans up.
+    if (\getmypid() === $workerPid) {
+        TempDir::remove($runtimeDir);
+    }
+});
 
 $config = new Configuration([
     'configDir' => $runtimeDir,
@@ -150,6 +196,7 @@ $config = new Configuration([
     'pager' => false,
     'rawOutput' => true,
     'trustProject' => true,
+    'errorLoggingLevel' => \E_ALL & ~$quietLevels,
 ]);
 
 if (\class_exists(\Laravel\Tinker\TinkerCaster::class)) {
@@ -222,6 +269,7 @@ $ready = [
         'fork' => Forker::supported(),
         'parser' => SourceCode::parser() !== null,
         'database' => $hasDatabase,
+        'fakes' => $framework === 'laravel' && SideEffects::available(),
     ],
 ];
 
@@ -261,6 +309,7 @@ $execute = static function (array $run, ?callable $progress = null) use ($runner
             'imports' => \array_values(\array_filter(\array_slice((array) ($run['imports'] ?? []), 0, 100), 'is_string')),
             'rollback' => (bool) ($run['rollback'] ?? false),
             'fresh' => (bool) ($run['fresh'] ?? true),
+            'fake' => (bool) ($run['fake'] ?? false),
         ]);
     } catch (Throwable $throwable) {
         $protocol->send([
@@ -343,10 +392,19 @@ $serviceRequest = static function (array $request, bool $busy) use (&$forker, $p
     }
 
     if ($type === 'modelHints') {
-        try {
-            $protocol->send(['type' => 'modelHints', 'id' => $id] + ModelHints::generate($basePath));
-        } catch (Throwable $throwable) {
-            $protocol->send(['type' => 'modelHints', 'id' => $id, 'php' => '', 'count' => 0, 'skipped' => [$throwable->getMessage()]]);
+        $generate = static function () use ($protocol, $basePath, $id): void {
+            try {
+                $protocol->send(['type' => 'modelHints', 'id' => $id] + ModelHints::generate($basePath));
+            } catch (Throwable $throwable) {
+                $protocol->send(['type' => 'modelHints', 'id' => $id, 'php' => '', 'count' => 0, 'skipped' => [$throwable->getMessage()]]);
+            }
+        };
+
+        // Model files are app code: a fatal error in one must not end the worker.
+        $failure = $forker !== null ? $forker->runTask($id, $generate) : $generate();
+
+        if ($failure !== null) {
+            $protocol->send(['type' => 'modelHints', 'id' => $id, 'php' => '', 'count' => 0, 'skipped' => [$failure]]);
         }
 
         return;
@@ -360,6 +418,10 @@ $serviceRequest = static function (array $request, bool $busy) use (&$forker, $p
 /** Runs in each forked child before any user code. */
 $prepareChild = static function () use ($app): void {
     \ini_set('display_errors', '0');
+
+    // Children inherit the parent's random state; without a new seed every
+    // fresh run would repeat the same mt_rand()/rand()/shuffle() sequence.
+    \mt_srand();
 
     if ($app !== null && $app->bound(\Illuminate\Contracts\Debug\ExceptionHandler::class)) {
         try {
@@ -376,21 +438,38 @@ $prepareChild = static function () use ($app): void {
 if (Forker::supported()) {
     $forker = new Forker(
         $protocol,
-        \Closure::fromCallable($prepareChild),
-        \Closure::fromCallable($execute),
-        \Closure::fromCallable($closeConnections),
+        $runtimeDir,
+        $prepareChild,
+        $execute,
+        $closeConnections,
         static fn (array $request) => $serviceRequest($request, true),
         static fn (string $id) => $protocol->send(['type' => 'scope', 'id' => $id] + $scopeReader->read($shell)),
     );
+
+    if (\function_exists('pcntl_signal') && \function_exists('pcntl_async_signals')) {
+        // Killing docker exec or ssh, or closing a terminal, may signal the
+        // worker instead of closing its input; take the children down with it.
+        $terminate = static function (int $signal) use ($forker): never {
+            $forker->terminate();
+            exit(128 + $signal);
+        };
+
+        \pcntl_async_signals(true);
+
+        foreach ([\SIGTERM, \SIGHUP, \SIGINT] as $signal) {
+            \pcntl_signal($signal, $terminate);
+        }
+    }
 }
 
+$flushBootOutput();
 $protocol->send($ready);
 
 while (true) {
-    $request = $protocol->read();
+    $request = $forker !== null ? $protocol->readPolling() : $protocol->read();
 
     if ($request === null || ($request['type'] ?? null) === 'shutdown') {
-        $forker?->shutdown();
+        $forker?->terminate();
         break;
     }
 
@@ -400,13 +479,13 @@ while (true) {
         continue;
     }
 
-    $fresh = (bool) ($request['fresh'] ?? true);
-
-    if ($forker !== null && ($fresh ? $forker->runFresh($request) : $forker->runKept($request))) {
-        continue;
+    if ($forker === null) {
+        // Without pcntl, runs share this process. The extension restarts the
+        // worker before each fresh run, so a fresh run still starts clean.
+        $execute($request);
+    } elseif ((bool) ($request['fresh'] ?? true)) {
+        $forker->runFresh($request);
+    } else {
+        $forker->runKept($request);
     }
-
-    // Without pcntl, runs share this process. The extension restarts the
-    // worker before each fresh run, so a fresh run still starts clean.
-    $execute($request);
 }

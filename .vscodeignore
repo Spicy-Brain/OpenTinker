@@ -1,21 +1,14 @@
-.vscode/**
-.github/**
-.claude/**
-docs/**
-test/**
-src/**
-scripts/**
-worker/**
-node_modules/**
-esbuild.mjs
-eslint.config.mjs
-vitest.config.mts
-tsconfig.json
-tsconfig.webview.json
-.prettierrc
-.prettierignore
-.editorconfig
-.gitignore
-**/*.map
-**/*.ts
-*.vsix
+# Allowlist: package only what the extension needs at runtime, so local files
+# (scratch files, .env, coverage, source maps) can never end up in the VSIX.
+# package.json is always included.
+**
+!dist/extension.js
+!dist/worker.php
+!dist/webview/results.js
+!dist/webview/results.css
+!media/icon.png
+!media/opentinker.svg
+!media/walkthrough/**
+!README.md
+!CHANGELOG.md
+!LICENSE

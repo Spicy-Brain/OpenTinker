@@ -7,16 +7,16 @@ export const RESULTS_VIEW_ID = 'opentinker.results';
 /**
  * Hosts the results front end either as an editor tab beside the scratch file
  * (Tinkerwell style) or as a view in the bottom panel next to Terminal.
- * Messages are queued until the front end says it is ready, and the latest
- * state is replayed whenever it is (re)created.
+ * Messages sent before the front end says it is ready are dropped: it gets a
+ * snapshot of the current state instead, whenever it is (re)created.
  */
 export class ResultsHost implements vscode.WebviewViewProvider, vscode.Disposable {
     private panel?: vscode.WebviewPanel;
     private view?: vscode.WebviewView;
     private webview?: vscode.Webview;
     private ready = false;
-    private queue: HostMessage[] = [];
-    private readonly disposables: vscode.Disposable[] = [];
+    /** Listeners for the current webview, dropped when it is replaced. */
+    private attached: vscode.Disposable[] = [];
 
     constructor(
         private readonly extensionUri: vscode.Uri,
@@ -53,16 +53,12 @@ export class ResultsHost implements vscode.WebviewViewProvider, vscode.Disposabl
         panel.iconPath = vscode.Uri.joinPath(this.extensionUri, 'media', 'opentinker.svg');
         this.panel = panel;
         this.attach(panel.webview);
-        panel.onDidDispose(
-            () => {
-                if (this.panel === panel) {
-                    this.panel = undefined;
-                    if (this.webview === panel.webview) this.detach();
-                }
-            },
-            undefined,
-            this.disposables,
-        );
+        const disposed = panel.onDidDispose(() => {
+            disposed.dispose();
+            if (this.panel !== panel) return;
+            this.panel = undefined;
+            if (this.webview === panel.webview) this.detach();
+        });
     }
 
     get visible(): boolean {
@@ -75,58 +71,46 @@ export class ResultsHost implements vscode.WebviewViewProvider, vscode.Disposabl
     }
 
     post(message: HostMessage): void {
-        if (!this.webview || !this.ready) {
-            this.queue.push(message);
-            if (this.queue.length > 5000) this.queue = this.queue.slice(-2500);
-            return;
-        }
-        void this.webview.postMessage(message);
+        if (this.webview && this.ready) void this.webview.postMessage(message);
     }
 
     resolveWebviewView(view: vscode.WebviewView): void {
         this.view = view;
         view.webview.options = { enableScripts: true, localResourceRoots: [this.webviewRoot()] };
         this.attach(view.webview);
-        view.onDidDispose(
-            () => {
-                if (this.view === view) {
-                    this.view = undefined;
-                    if (this.webview === view.webview) this.detach();
-                }
-            },
-            undefined,
-            this.disposables,
-        );
+        const disposed = view.onDidDispose(() => {
+            disposed.dispose();
+            if (this.view !== view) return;
+            this.view = undefined;
+            if (this.webview === view.webview) this.detach();
+        });
     }
 
     dispose(): void {
         this.panel?.dispose();
-        for (const disposable of this.disposables) disposable.dispose();
+        this.detach();
     }
 
     private attach(webview: vscode.Webview): void {
+        this.detach();
         this.webview = webview;
-        this.ready = false;
-        this.queue = [];
         webview.html = this.html(webview);
-        webview.onDidReceiveMessage(
-            (message: unknown) => {
-                if (!isPanelMessage(message)) return;
+        this.attached.push(
+            webview.onDidReceiveMessage((message: unknown) => {
+                if (!isPanelMessage(message) || webview !== this.webview) return;
                 if (message.kind === 'ready') {
-                    if (webview !== this.webview) return;
                     this.ready = true;
                     for (const replay of this.snapshot()) void webview.postMessage(replay);
-                    this.queue = [];
                     return;
                 }
                 this.onMessage(message);
-            },
-            undefined,
-            this.disposables,
+            }),
         );
     }
 
     private detach(): void {
+        for (const disposable of this.attached) disposable.dispose();
+        this.attached = [];
         this.webview = undefined;
         this.ready = false;
     }
@@ -139,13 +123,16 @@ export class ResultsHost implements vscode.WebviewViewProvider, vscode.Disposabl
         const nonce = randomBytes(16).toString('base64');
         const script = webview.asWebviewUri(vscode.Uri.joinPath(this.webviewRoot(), 'results.js'));
         const style = webview.asWebviewUri(vscode.Uri.joinPath(this.webviewRoot(), 'results.css'));
+        // https: images are only for previews, whose own policy blocks them
+        // until the user asks (see previewView).
         const csp = [
             "default-src 'none'",
             `style-src ${webview.cspSource} 'unsafe-inline'`,
             `script-src 'nonce-${nonce}'`,
             `img-src ${webview.cspSource} data: https:`,
             `font-src ${webview.cspSource} data:`,
-            'frame-src data:',
+            "form-action 'none'",
+            "base-uri 'none'",
         ].join('; ');
         return `<!DOCTYPE html>
 <html lang="en">

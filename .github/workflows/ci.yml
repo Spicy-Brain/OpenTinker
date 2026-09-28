@@ -13,7 +13,7 @@ jobs:
             - uses: actions/checkout@v4
             - uses: actions/setup-node@v4
               with:
-                  node-version: 20
+                  node-version: 24
                   cache: npm
             - run: npm ci
             - run: npm run typecheck
@@ -29,7 +29,7 @@ jobs:
             - uses: actions/checkout@v4
             - uses: actions/setup-node@v4
               with:
-                  node-version: 20
+                  node-version: 24
             - uses: shivammathur/setup-php@v2
               with:
                   php-version: '8.4'
@@ -47,16 +47,18 @@ jobs:
             fail-fast: false
             matrix:
                 include:
+                    - { php: '8.1', laravel: '10' }
                     - { php: '8.2', laravel: '10' }
                     - { php: '8.2', laravel: '11', psysh: '0.12.21' }
                     - { php: '8.3', laravel: '12' }
                     - { php: '8.4', laravel: '12' }
                     - { php: '8.4', laravel: '13' }
+                    - { php: '8.5', laravel: '13' }
         steps:
             - uses: actions/checkout@v4
             - uses: actions/setup-node@v4
               with:
-                  node-version: 20
+                  node-version: 24
             - uses: shivammathur/setup-php@v2
               with:
                   php-version: ${{ matrix.php }}
@@ -64,6 +66,9 @@ jobs:
                   tools: composer
             - name: Create a Laravel ${{ matrix.laravel }} app
               run: |
+                  # Throwaway test apps: Composer 2.10+ refuses releases with security
+                  # advisories, which older Laravel versions have.
+                  composer config --global policy.advisories.block false
                   composer create-project "laravel/laravel:^${{ matrix.laravel }}.0" app --no-interaction --prefer-dist --quiet
                   cd app
                   if [ -n "${{ matrix.psysh }}" ]; then composer require --dev "psy/psysh:${{ matrix.psysh }}" -W --no-interaction --quiet; fi
@@ -82,7 +87,7 @@ jobs:
             - uses: actions/checkout@v4
             - uses: actions/setup-node@v4
               with:
-                  node-version: 20
+                  node-version: 24
             - uses: shivammathur/setup-php@v2
               with:
                   php-version: '8.3'
@@ -99,7 +104,7 @@ jobs:
             - uses: actions/checkout@v4
             - uses: actions/setup-node@v4
               with:
-                  node-version: 20
+                  node-version: 24
                   cache: npm
             - uses: shivammathur/setup-php@v2
               with:
@@ -110,6 +115,7 @@ jobs:
             - run: npm run build
             - name: Create a throwaway Laravel app
               run: |
+                  composer config --global policy.advisories.block false
                   composer create-project laravel/laravel app --no-interaction --prefer-dist --quiet
                   cd app && php artisan migrate --force --no-interaction
             - run: xvfb-run -a node test/e2e/run.mjs "$PWD/app" --reset

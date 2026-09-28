@@ -1,14 +1,14 @@
 {
     "name": "opentinker",
     "displayName": "OpenTinker",
-    "description": "A Tinkerwell-style scratchpad for Laravel and PHP in VS Code: fresh runs, per-line results, model cards, SQL insight and safe production runs.",
+    "description": "Scratchpad for Laravel and PHP: run code in your app's real runtime (Docker, local PHP or SSH) and see every line's result, with model cards, SQL insight and production safety.",
     "version": "0.3.0",
-    "publisher": "open-tinker",
+    "publisher": "snitzle",
     "license": "MIT",
     "private": true,
     "engines": {
         "vscode": "^1.90.0",
-        "node": ">=20"
+        "node": ">=22"
     },
     "categories": [
         "Programming Languages",
@@ -16,24 +16,48 @@
     ],
     "keywords": [
         "laravel",
+        "php",
         "tinker",
-        "tinkerwell",
         "psysh",
         "repl",
-        "php",
         "scratchpad",
+        "playground",
+        "eloquent",
+        "artisan",
         "docker",
-        "eloquent"
+        "sail",
+        "ssh"
     ],
     "repository": {
         "type": "git",
         "url": "https://github.com/Spicy-Brain/OpenTinker.git"
     },
+    "bugs": {
+        "url": "https://github.com/Spicy-Brain/OpenTinker/issues"
+    },
+    "homepage": "https://github.com/Spicy-Brain/OpenTinker#readme",
+    "icon": "media/icon.png",
+    "galleryBanner": {
+        "color": "#1E1B4B",
+        "theme": "dark"
+    },
+    "preview": true,
+    "extensionKind": [
+        "workspace"
+    ],
+    "capabilities": {
+        "untrustedWorkspaces": {
+            "supported": false,
+            "description": "OpenTinker runs PHP code in your app's runtime, so it only works in trusted workspaces."
+        },
+        "virtualWorkspaces": {
+            "supported": false,
+            "description": "OpenTinker needs local files and runs PHP, Docker or SSH processes."
+        }
+    },
     "main": "./dist/extension.js",
     "activationEvents": [
         "onLanguage:php",
-        "onView:opentinker.main",
-        "onView:opentinker.results",
         "workspaceContains:artisan",
         "workspaceContains:composer.json"
     ],
@@ -98,11 +122,6 @@
                 "icon": "$(server-environment)"
             },
             {
-                "command": "opentinker.selectConnection",
-                "title": "Select Runtime (Choose Target)",
-                "category": "OpenTinker"
-            },
-            {
                 "command": "opentinker.selectTargetForFile",
                 "title": "Choose Target for This File…",
                 "category": "OpenTinker"
@@ -126,6 +145,11 @@
             {
                 "command": "opentinker.toggleRollback",
                 "title": "Toggle Database Rollback",
+                "category": "OpenTinker"
+            },
+            {
+                "command": "opentinker.toggleFakes",
+                "title": "Toggle Fake Side Effects",
                 "category": "OpenTinker"
             },
             {
@@ -168,6 +192,12 @@
                 "title": "Check Setup",
                 "category": "OpenTinker",
                 "icon": "$(pulse)"
+            },
+            {
+                "command": "opentinker.getStarted",
+                "title": "Get Started",
+                "category": "OpenTinker",
+                "icon": "$(book)"
             },
             {
                 "command": "opentinker.generateModelHints",
@@ -309,6 +339,11 @@
                     "group": "navigation@3"
                 },
                 {
+                    "command": "opentinker.getStarted",
+                    "when": "view == opentinker.main",
+                    "group": "1_setup@0"
+                },
+                {
                     "command": "opentinker.doctor",
                     "when": "view == opentinker.main",
                     "group": "1_setup@1"
@@ -377,10 +412,6 @@
                 {
                     "command": "opentinker.rerun",
                     "when": "false"
-                },
-                {
-                    "command": "opentinker.selectConnection",
-                    "when": "false"
                 }
             ],
             "editor/title": [
@@ -407,6 +438,7 @@
                 "opentinker.php.binary": {
                     "type": "string",
                     "default": "php",
+                    "scope": "machine-overridable",
                     "description": "PHP binary for local targets."
                 },
                 "opentinker.ssh.phpBinary": {
@@ -417,7 +449,7 @@
                 "opentinker.scratchDir": {
                     "type": "string",
                     "default": ".tinker",
-                    "description": "Directory (relative to the workspace) for scratch files."
+                    "description": "Directory (relative to the workspace) for scratch files. Reload the window after changing it."
                 },
                 "opentinker.executionMode": {
                     "type": "string",
@@ -472,6 +504,11 @@
                     "default": false,
                     "description": "Run code inside a database transaction and roll it back afterwards. Mail, queues, files and external calls are not rolled back."
                 },
+                "opentinker.fakeSideEffects": {
+                    "type": "boolean",
+                    "default": false,
+                    "markdownDescription": "Fake mail, notifications, queued and dispatched jobs, and requests made with Laravel's `Http` client during runs, and show what each statement would have sent. Needs Laravel. Events, files, cache and SDKs with their own HTTP clients stay real. Pair it with `#opentinker.database.rollback#` to try changes safely."
+                },
                 "opentinker.production.confirm": {
                     "type": "string",
                     "enum": [
@@ -505,6 +542,16 @@
                     "default": true,
                     "description": "Show each statement's result at the end of its line."
                 },
+                "opentinker.codeLens.runMethods": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Show Run method and Run function above public methods and functions that take no required arguments."
+                },
+                "opentinker.codeLens.tinkerModel": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Show Tinker this model above Eloquent model classes."
+                },
                 "opentinker.bootstrap": {
                     "type": "string",
                     "default": "auto",
@@ -512,10 +559,83 @@
                 }
             }
         },
+        "walkthroughs": [
+            {
+                "id": "getStarted",
+                "title": "Get started with OpenTinker",
+                "description": "Run PHP against your Laravel or PHP app and see what every line did.",
+                "steps": [
+                    {
+                        "id": "run",
+                        "title": "Run your first scratch file",
+                        "description": "The Tinker window opens a scratch file beside its results. Write some PHP and press Cmd+Enter (Ctrl+Enter on Windows and Linux): each line's value appears at the end of the line, with model cards, tables and SQL in the results panel.\n[Open Tinker Window](command:opentinker.open)",
+                        "media": {
+                            "image": "media/walkthrough/run.jpg",
+                            "altText": "A scratch file with values at the end of each line, and the results panel with a model card, a table and SQL."
+                        },
+                        "completionEvents": [
+                            "onCommand:opentinker.run",
+                            "onCommand:opentinker.runFile"
+                        ]
+                    },
+                    {
+                        "id": "target",
+                        "title": "Choose where code runs",
+                        "description": "The first run finds your app by itself: a Docker Compose service (Sail included), a running container, or local PHP. Add an SSH server, or give one scratch file its own target. Production targets turn red.\n[Choose Target](command:opentinker.selectTarget)",
+                        "media": {
+                            "image": "media/walkthrough/targets.jpg",
+                            "altText": "The target form, with Docker Compose, Docker container, local PHP and SSH runtimes."
+                        },
+                        "completionEvents": [
+                            "onCommand:opentinker.selectTarget",
+                            "onCommand:opentinker.selectTargetForFile",
+                            "onCommand:opentinker.newTarget"
+                        ]
+                    },
+                    {
+                        "id": "safety",
+                        "title": "Try changes safely",
+                        "description": "Roll back database changes after each run, and fake mail, notifications, jobs and Laravel HTTP client calls to see what they would have sent without sending anything. On production, OpenTinker asks before code that writes.\n[Toggle Rollback](command:opentinker.toggleRollback)\n[Toggle Fake Side Effects](command:opentinker.toggleFakes)",
+                        "media": {
+                            "image": "media/walkthrough/safety.jpg",
+                            "altText": "A result card listing an email and an HTTP request that were faked instead of sent."
+                        },
+                        "completionEvents": [
+                            "onCommand:opentinker.toggleRollback",
+                            "onCommand:opentinker.toggleFakes"
+                        ]
+                    },
+                    {
+                        "id": "anywhere",
+                        "title": "Run code from anywhere",
+                        "description": "Cmd+Shift+Enter (Ctrl+Shift+Enter) runs the selection or current line of any PHP file. CodeLens can tinker a model or run a method, and snippets with inputs live in .tinker/snippets for your team to share.\n[Save Snippet](command:opentinker.saveSnippet)",
+                        "media": {
+                            "markdown": "media/walkthrough/anywhere.md"
+                        },
+                        "completionEvents": [
+                            "onCommand:opentinker.runSelection",
+                            "onCommand:opentinker.saveSnippet",
+                            "onCommand:opentinker.runSnippet"
+                        ]
+                    },
+                    {
+                        "id": "setup",
+                        "title": "Check your setup",
+                        "description": "Check Setup starts your target, reports the PHP, Laravel and PsySH versions, and looks for keymap and Intelephense conflicts.\n[Check Setup](command:opentinker.doctor)",
+                        "media": {
+                            "markdown": "media/walkthrough/setup.md"
+                        },
+                        "completionEvents": [
+                            "onCommand:opentinker.doctor"
+                        ]
+                    }
+                ]
+            }
+        ],
         "viewsWelcome": [
             {
                 "view": "opentinker.main",
-                "contents": "Run PHP against your app, line by line.\n[Open Tinker Window](command:opentinker.open)\n[Choose Target](command:opentinker.selectTarget)"
+                "contents": "OpenTinker runs PHP against your Laravel or PHP app, line by line. Open the project's folder to start.\n[Open Folder](command:vscode.openFolder)"
             }
         ]
     },
@@ -527,7 +647,7 @@
         "format": "prettier --write .",
         "format:check": "prettier --check .",
         "test": "vitest run",
-        "package": "npm run build && vsce package --no-dependencies",
+        "package": "vsce package --no-dependencies",
         "vscode:prepublish": "npm run build",
         "build:worker": "node scripts/build-worker.mjs",
         "test:worker": "php test/workerFeatures.php",
@@ -535,7 +655,7 @@
     },
     "devDependencies": {
         "@types/node": "^22.13.5",
-        "@types/vscode": "^1.90.0",
+        "@types/vscode": "~1.90.0",
         "@vscode/test-electron": "^3.1.0",
         "@vscode/vsce": "^3.2.2",
         "esbuild": "^0.25.0",

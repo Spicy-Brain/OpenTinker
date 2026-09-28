@@ -11,13 +11,16 @@ use Throwable;
  * Executes one run statement by statement, emitting a frame per result.
  *
  * The same Runner serves both session modes: in a fresh session it runs in a
- * forked child with a pristine shell; in a kept session it runs in the worker
- * process and relies on ImportAliases to tolerate re-declared imports.
+ * forked child with a pristine shell; in a kept session it runs in the session
+ * child and relies on ImportAliases to tolerate re-declared imports.
  */
 final class Runner
 {
     /** @var (callable(int, int): void)|null */
     private $onStatement = null;
+
+    /** Fakes for the current run, when it asked for them. */
+    private ?SideEffects $effects = null;
 
     public function __construct(
         private readonly Shell $shell,
@@ -38,7 +41,7 @@ final class Runner
     }
 
     /**
-     * @param array{id: string, code: string, mode: string, imports: array<int, string>, rollback: bool, fresh: bool} $run
+     * @param array{id: string, code: string, mode: string, imports: array<int, string>, rollback: bool, fresh: bool, fake?: bool} $run
      */
     public function run(array $run): void
     {
@@ -78,7 +81,39 @@ final class Runner
             $statements = $split['statements'];
         }
 
-        $rolledBack = $run['rollback'] ? $this->beginTransaction() : null;
+        // Fake side effects promises that nothing is sent; without every fake in place, run nothing.
+        $effects = null;
+
+        if ($run['fake'] ?? false) {
+            $effects = new SideEffects();
+
+            try {
+                if (! SideEffects::available()) {
+                    throw new \RuntimeException('it needs Laravel');
+                }
+
+                $effects->install();
+            } catch (Throwable $throwable) {
+                $this->reportError($id, 0, 1, new \RuntimeException('Fake Side Effects could not fake mail, notifications, jobs and HTTP calls, so nothing was run: ' . $throwable->getMessage(), 0, $throwable), $startedAt);
+                $this->finish($id, $startedAt, 0, true, null, null, false);
+
+                return;
+            }
+        }
+
+        $transaction = $run['rollback'] ? $this->beginTransaction() : null;
+        $rolledBack = null;
+
+        if (\is_string($transaction)) {
+            $effects?->restore();
+            // Rollback mode promises that nothing is saved; without a transaction, run nothing.
+            $this->reportError($id, 0, 1, new \RuntimeException("Rollback mode could not start a database transaction, so nothing was run: {$transaction}"), $startedAt);
+            $this->finish($id, $startedAt, 0, true, null, null);
+
+            return;
+        }
+
+        $this->effects = $effects;
 
         try {
             foreach ($run['imports'] as $import) {
@@ -102,9 +137,10 @@ final class Runner
                 $line = $statement['line'];
                 $this->protocol->stmt = $stmtIndex;
                 $this->protocol->line = $line;
-                $this->capture->setLineContext($line, 0);
+                $this->capture->setLine($line);
                 $this->capture->resetCount();
                 $this->sql->reset();
+                ExitCalledException::$raised = null;
 
                 if ($this->onStatement !== null) {
                     ($this->onStatement)($stmtIndex, $line);
@@ -122,23 +158,36 @@ final class Runner
 
                     $value = $this->execute(TokenRewriter::rewrite($statement['code']), $run['fresh']);
 
+                    // A dd() or exit that the scratch code caught itself still ends the run.
+                    if (ExitCalledException::$raised !== null) {
+                        throw ExitCalledException::$raised;
+                    }
+
                     if (\class_exists(\Psy\CodeCleaner\NoReturnValue::class, false) && $value instanceof \Psy\CodeCleaner\NoReturnValue) {
                         $value = null;
                     }
 
                     $this->inspect($id, $stmtIndex, $line, $statement['code'], $value, $magic);
 
-                    $showValue = $value !== null && $this->capture->count() === 0;
-                    if ($showValue) {
+                    // Rendering never throws: a value whose own code fails to
+                    // display must not turn a statement that worked into an error.
+                    $short = null;
+
+                    if ($value !== null && $this->capture->count() === 0) {
+                        $short = Values::short($value);
                         $this->protocol->send([
                             'type' => 'value',
                             'id' => $id,
                             'stmt' => $stmtIndex,
                             'line' => $line,
-                            'short' => Values::short($value),
+                            'short' => $short,
                             'html' => $this->capture->capture($value),
                         ] + Values::structured($value));
                     }
+
+                    // Let go of the value now: a returned PendingDispatch dispatches
+                    // when released, and that belongs to this statement.
+                    $value = null;
 
                     $this->protocol->send($this->statementFrame(
                         $id,
@@ -148,7 +197,7 @@ final class Runner
                         $statementStart,
                         null,
                         false,
-                        $showValue ? Values::short($value) : null,
+                        $short,
                         $line + \substr_count(\rtrim($statement['code']), "\n"),
                     ));
                 } catch (ExitCalledException $exception) {
@@ -163,19 +212,22 @@ final class Runner
                 }
             }
         } finally {
-            if ($rolledBack === true) {
-                $rolledBack = $this->rollBack();
+            if (\is_array($transaction)) {
+                $rolledBack = $this->rollBack($transaction);
             }
+
+            $this->effects?->restore();
+            $this->effects = null;
         }
 
         $this->protocol->stmt = 0;
         $this->protocol->line = null;
-        $this->capture->setLineContext(null, 0);
+        $this->capture->setLine(null);
 
         $scope = $this->scope->read($this->shell);
         $this->protocol->send(['type' => 'scope', 'id' => $id] + $scope);
 
-        $this->finish($id, $startedAt, $stmtIndex, $failed, $rolledBack, $ended);
+        $this->finish($id, $startedAt, $stmtIndex, $failed, $rolledBack, $ended, $effects !== null ? true : null);
     }
 
     private function execute(string $code, bool $fresh): mixed
@@ -192,7 +244,7 @@ final class Runner
         return $this->shell->execute($code, true);
     }
 
-    private function finish(string $id, float $startedAt, int $statements, bool $failed, ?bool $rolledBack, ?string $ended): void
+    private function finish(string $id, float $startedAt, int $statements, bool $failed, ?bool $rolledBack, ?string $ended, ?bool $faked = null): void
     {
         $this->protocol->requestId = null;
         $this->protocol->send([
@@ -204,36 +256,55 @@ final class Runner
             'ms' => \round((\microtime(true) - $startedAt) * 1000, 2),
             'memory' => \memory_get_peak_usage(true),
             'rolledBack' => $rolledBack,
+            'faked' => $faked,
             'ended' => $ended,
         ]);
     }
 
-    /** Starts a transaction to roll back; null when there is no database to protect. */
-    private function beginTransaction(): ?bool
+    /**
+     * Starts the rollback transaction on the default connection.
+     *
+     * @return array{connection: \Illuminate\Database\ConnectionInterface, level: int}|string|null
+     *         the transaction, why it could not start, or null when there is no database
+     */
+    private function beginTransaction(): array|string|null
     {
         if (! $this->hasDatabase) {
             return null;
         }
 
         try {
-            \Illuminate\Support\Facades\DB::connection()->beginTransaction();
+            $connection = \Illuminate\Support\Facades\DB::connection();
+            $connection->beginTransaction();
 
-            return true;
+            return ['connection' => $connection, 'level' => $connection->transactionLevel()];
         } catch (Throwable $throwable) {
-            $this->protocol->output('[opentinker] Could not start a rollback transaction: ' . $throwable->getMessage() . "\n");
-
-            return null;
+            return $throwable->getMessage();
         }
     }
 
-    private function rollBack(): bool
+    /**
+     * Rolls back to where the run started, on the connection it started on.
+     * False when that cannot be promised: the run ended the transaction itself
+     * (DB::commit(), a disconnect) or the database committed it implicitly.
+     *
+     * @param array{connection: \Illuminate\Database\ConnectionInterface, level: int} $transaction
+     */
+    private function rollBack(array $transaction): bool
     {
-        try {
-            $connection = \Illuminate\Support\Facades\DB::connection();
+        ['connection' => $connection, 'level' => $level] = $transaction;
+        $lost = '[opentinker] The run ended the rollback transaction itself (for example with DB::commit(), or a schema change on MySQL), so its changes may have been saved.' . "\n";
 
-            while ($connection->transactionLevel() > 0) {
-                $connection->rollBack();
+        try {
+            $pdo = \method_exists($connection, 'getPdo') ? $connection->getPdo() : null;
+
+            if ($connection->transactionLevel() < $level || ($pdo instanceof \PDO && ! $pdo->inTransaction())) {
+                $this->protocol->output($lost);
+
+                return false;
             }
+
+            $connection->rollBack($level - 1);
 
             return true;
         } catch (Throwable $throwable) {
@@ -337,6 +408,9 @@ final class Runner
             'sql' => $this->sql->summary(),
         ];
 
+        $sideEffects = $this->effects?->collect() ?? [];
+
+        if ($sideEffects !== []) $frame['sideEffects'] = $sideEffects;
         if ($exit !== null) $frame['exit'] = $exit;
         if ($import) $frame['import'] = true;
         if ($short !== null) $frame['short'] = $short;

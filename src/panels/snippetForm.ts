@@ -11,7 +11,7 @@ export function collectSnippetParameters(
             'opentinker.snippetForm',
             `Run ${snippet.name}`,
             vscode.ViewColumn.Active,
-            { enableScripts: true },
+            { enableScripts: true, retainContextWhenHidden: true },
         );
         const nonce = randomUUID().replaceAll('-', '');
         const parameters = JSON.stringify(snippet.parameters).replaceAll('<', '\\u003c');
@@ -50,6 +50,7 @@ for (const param of parameters) {
     form.appendChild(label);
 }
 const button = document.createElement('button'); button.type = 'submit'; button.textContent = 'Run snippet'; form.appendChild(button);
+form.querySelector('input, textarea, select')?.focus();
 form.addEventListener('submit', (event) => {
     event.preventDefault();
     const values = {};

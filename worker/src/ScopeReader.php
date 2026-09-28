@@ -41,16 +41,9 @@ final class ScopeReader
                 break;
             }
 
-            try {
-                $html = $this->capture->capture($value);
-            } catch (Throwable) {
-                continue;
-            }
-
-            if (\strlen($html) > self::MAX_VARIABLE_BYTES) {
-                $html = '<em>Too large to display.</em>';
-                $truncated = true;
-            }
+            // Bounded and safe for lazy values: nothing here iterates or counts them.
+            $html = $this->capture->capture($value, null, self::MAX_VARIABLE_BYTES);
+            $truncated = $truncated || $html === DumpCapture::TOO_LARGE;
 
             if ($totalBytes + \strlen($html) > self::MAX_TOTAL_BYTES) {
                 $truncated = true;

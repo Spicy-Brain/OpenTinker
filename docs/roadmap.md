@@ -48,7 +48,10 @@ See [wsl-support.md](wsl-support.md) for the full plan.
 
 ## Release
 
-- [ ] Marketplace/Open VSX listing assets, PNG icon, demo GIF
-- [ ] Release checklist and store submission (see [store-release-plan.md](store-release-plan.md))
+- [x] Marketplace/Open VSX listing assets: PNG icon, screenshots, README, changelog
+- [x] Release checklist and a release workflow that verifies and packages the VSIX (see
+      [store-release-plan.md](store-release-plan.md))
+- [ ] Demo GIF
+- [ ] First store upload (preview), by hand
 - [ ] Optional Laravel Boost MCP interoperability
 - [ ] 1.0

@@ -38,12 +38,6 @@ final class Protocol
         $this->stdout = \fopen('php://stdout', 'wb');
     }
 
-    /** @return resource */
-    public function input()
-    {
-        return $this->stdin;
-    }
-
     /** @param array<string, mixed> $frame */
     public function send(array $frame): void
     {
@@ -56,8 +50,13 @@ final class Protocol
             $encoded = \json_encode(['type' => 'fatal', 'message' => 'Failed to encode frame']);
         }
 
-        \fwrite($this->stdout, $encoded . "\n");
-        \fflush($this->stdout);
+        // Every frame starts on a fresh line, so bytes that bypass the protocol
+        // (a BOM, fwrite(STDOUT), a child killed mid-write) end their own line
+        // instead of corrupting this frame. Decoders skip the empty lines.
+        // A failed write means the extension has gone; the worker exits when
+        // it sees stdin close, so there is nothing else to do here.
+        @\fwrite($this->stdout, "\n" . $encoded . "\n");
+        @\fflush($this->stdout);
     }
 
     /** @param array<string, mixed> $request */
@@ -74,6 +73,21 @@ final class Protocol
         }
 
         return $this->readStream();
+    }
+
+    /**
+     * Like read(), but waits in short select() calls rather than one blocking
+     * read, so asynchronous signal handlers get to run while the worker is idle.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function readPolling(): ?array
+    {
+        while ($this->queue === [] && ! $this->readReady(1_000_000)) {
+            // Keep waiting; a signal handler may run in between.
+        }
+
+        return $this->read();
     }
 
     /** @return array<string, mixed>|null */
@@ -112,7 +126,7 @@ final class Protocol
         $write = null;
         $except = null;
 
-        return @\stream_select($read, $write, $except, 0, $micros) > 0;
+        return @\stream_select($read, $write, $except, \intdiv($micros, 1_000_000), $micros % 1_000_000) > 0;
     }
 
     public function output(string $text): void

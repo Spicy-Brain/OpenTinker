@@ -26,7 +26,8 @@ export function openTargetForm(options: TargetFormOptions): void {
         'opentinker.targetForm',
         options.existing ? `Edit target · ${options.existing.name}` : 'New OpenTinker target',
         vscode.ViewColumn.Active,
-        { enableScripts: true },
+        // Kept alive while hidden so switching tabs to copy a host or path keeps the input.
+        { enableScripts: true, retainContextWhenHidden: true },
     );
     current = panel;
     panel.onDidDispose(() => {
@@ -99,8 +100,16 @@ export function openTargetForm(options: TargetFormOptions): void {
                 return;
             }
 
-            await options.save(target, message.use === true);
-            panel.dispose();
+            try {
+                await options.save(target, message.use === true);
+                panel.dispose();
+            } catch (error) {
+                post({
+                    kind: 'status',
+                    ok: false,
+                    text: `Could not save: ${error instanceof Error ? error.message : String(error)}`,
+                });
+            }
         },
     );
 }
@@ -184,8 +193,8 @@ input, select { box-sizing: border-box; display: block; width: 100%; margin-top:
 .kind span { font-size: .85em; opacity: .8; }
 .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
-button.btn { font: inherit; padding: 6px 14px; border-radius: 3px; border: 1px solid transparent; cursor: pointer; color: var(--vscode-button-secondaryForeground); background: var(--vscode-button-secondaryBackground); }
-button.primary { color: var(--vscode-button-foreground); background: var(--vscode-button-background); }
+button.btn { font: inherit; padding: 6px 14px; border-radius: 3px; border: 1px solid var(--vscode-button-border, var(--vscode-panel-border)); cursor: pointer; color: var(--vscode-button-secondaryForeground); background: var(--vscode-button-secondaryBackground); }
+button.primary { color: var(--vscode-button-foreground); background: var(--vscode-button-background); border-color: var(--vscode-button-border, transparent); }
 button.danger { margin-left: auto; color: var(--vscode-errorForeground); background: transparent; border-color: var(--vscode-errorForeground); }
 #status { margin-top: 14px; padding: 8px 10px; border-radius: 4px; white-space: pre-wrap; font-family: var(--vscode-editor-font-family); font-size: .92em; }
 #status.ok { border-left: 3px solid var(--vscode-testing-iconPassed); background: var(--vscode-editorWidget-background); }
@@ -297,7 +306,8 @@ function collect() {
 
 document.getElementById('test').addEventListener('click', () => vscode.postMessage({ kind: 'test', target: collect() }));
 document.getElementById('save').addEventListener('click', () => vscode.postMessage({ kind: 'save', target: collect(), use: false }));
-form.addEventListener('submit', (event) => { event.preventDefault(); vscode.postMessage({ kind: 'save', target: collect(), use: true }); });
+// Only a new target becomes the active one; saving an edit must never switch where code runs.
+form.addEventListener('submit', (event) => { event.preventDefault(); vscode.postMessage({ kind: 'save', target: collect(), use: data.isNew }); });
 document.getElementById('cancel').addEventListener('click', () => vscode.postMessage({ kind: 'cancel' }));
 document.getElementById('delete').addEventListener('click', () => vscode.postMessage({ kind: 'delete' }));
 

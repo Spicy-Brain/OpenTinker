@@ -1,6 +1,6 @@
 import * as path from 'node:path';
 import * as vscode from 'vscode';
-import type { CallableTarget } from '../run/callable';
+import { requiredParameterCount, type CallableTarget } from '../run/callable';
 import type { Target } from '../targets/target';
 
 export interface LensContext {
@@ -10,6 +10,11 @@ export interface LensContext {
     environment(target: Target): string;
     sessionMode(): 'fresh' | 'keep';
     rollback(): boolean;
+    fake(): boolean;
+    /** Show "Run method" / "Run function". */
+    runMethods(): boolean;
+    /** Show "Tinker this model". */
+    tinkerModel(): boolean;
 }
 
 const MODEL_PARENT =
@@ -66,8 +71,21 @@ export class OpenTinkerCodeLens implements vscode.CodeLensProvider {
                     command: 'opentinker.toggleRollback',
                     tooltip: 'Roll back database changes after each run',
                 }),
+                new vscode.CodeLens(top, {
+                    title: this.context.fake()
+                        ? '$(debug-disconnect) Fakes on'
+                        : '$(circle-slash) Fakes off',
+                    command: 'opentinker.toggleFakes',
+                    tooltip:
+                        'Fake mail, notifications, jobs and HTTP calls, and show what they would have sent',
+                }),
             );
         }
+
+        // Scratch files only get the control strip; other files get the lenses that are enabled.
+        const runMethods = this.context.runMethods();
+        const tinkerModel = this.context.tinkerModel();
+        if (this.context.isScratch(document.uri) || (!runMethods && !tinkerModel)) return lenses;
 
         const symbols = await vscode.commands.executeCommand<vscode.DocumentSymbol[] | undefined>(
             'vscode.executeDocumentSymbolProvider',
@@ -77,7 +95,6 @@ export class OpenTinkerCodeLens implements vscode.CodeLensProvider {
 
         const text = document.getText();
         const namespace = text.match(/\bnamespace\s+([A-Za-z_][A-Za-z0-9_\\]*)\s*;/)?.[1] ?? '';
-        const scratch = this.context.isScratch(document.uri);
 
         const visit = (symbol: vscode.DocumentSymbol, parentClass?: string): void => {
             if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(symbol.name)) return;
@@ -91,7 +108,7 @@ export class OpenTinkerCodeLens implements vscode.CodeLensProvider {
                 const declaration = document.getText(
                     new vscode.Range(symbol.range.start, symbol.selectionRange.end.translate(1, 0)),
                 );
-                if (!scratch && (MODEL_PARENT.test(declaration) || isModelsPath(document.uri))) {
+                if (tinkerModel && (MODEL_PARENT.test(declaration) || isModelsPath(document.uri))) {
                     lenses.push(
                         new vscode.CodeLens(symbol.selectionRange, {
                             title: '$(beaker) Tinker this model',
@@ -105,10 +122,11 @@ export class OpenTinkerCodeLens implements vscode.CodeLensProvider {
                 return;
             }
 
-            if (scratch) return;
+            if (!runMethods) return;
             const method = parentClass && symbol.kind === vscode.SymbolKind.Method;
             const func = !parentClass && symbol.kind === vscode.SymbolKind.Function;
             if (!method && !func) return;
+            if (!isCallable(document, symbol, !!method)) return;
 
             const target: CallableTarget = {
                 kind: method ? 'method' : 'function',
@@ -136,4 +154,23 @@ export class OpenTinkerCodeLens implements vscode.CodeLensProvider {
 
 function isModelsPath(uri: vscode.Uri): boolean {
     return /[/\\]app[/\\]Models[/\\]/.test(uri.fsPath);
+}
+
+/**
+ * Only public methods and functions that need no arguments can be run from a
+ * lens; showing it elsewhere only leads to an error. Magic methods are skipped.
+ */
+function isCallable(
+    document: vscode.TextDocument,
+    symbol: vscode.DocumentSymbol,
+    method: boolean,
+): boolean {
+    if (symbol.name.startsWith('__')) return false;
+    const { start, end } = symbol.selectionRange;
+    const before = document.lineAt(start.line).text.slice(0, start.character);
+    if (method && /\b(private|protected|abstract)\b/i.test(before)) return false;
+    const after = document.getText(
+        document.validateRange(new vscode.Range(end, new vscode.Position(end.line + 40, 0))),
+    );
+    return (requiredParameterCount(after) ?? 0) === 0;
 }

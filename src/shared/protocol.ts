@@ -17,6 +17,8 @@ export interface ExecRequest {
     fresh: boolean;
     /** Wrap the run in a database transaction and roll it back. */
     rollback: boolean;
+    /** Fake mail, notifications, jobs and HTTP calls, and report what they captured. */
+    fake?: boolean;
 }
 
 export type SimpleRequestType = 'ping' | 'log' | 'scope' | 'reset' | 'modelHints';
@@ -32,6 +34,8 @@ export interface Capabilities {
     fork: boolean;
     parser: boolean;
     database: boolean;
+    /** Laravel's mail, notification, bus, queue and HTTP fakes are available. */
+    fakes?: boolean;
 }
 
 export interface ReadyFrame {
@@ -139,6 +143,15 @@ export interface SqlSummary {
     repeated: Array<{ sql: string; count: number }>;
 }
 
+/** Something a statement would have sent, captured by a fake instead. */
+export interface SideEffect {
+    kind: 'mail' | 'notification' | 'job' | 'http';
+    /** e.g. "App\Mail\Welcome to ada@example.com" or "POST https://api.example.com/charges". */
+    summary: string;
+    /** Rendered email, when the mailable could be rendered. */
+    html?: string;
+}
+
 export interface StatementFrame {
     type: 'statement';
     id: string;
@@ -153,6 +166,7 @@ export interface StatementFrame {
     short?: string;
     queries?: QueryRecord[];
     sql?: SqlSummary;
+    sideEffects?: SideEffect[];
 }
 
 export interface ResultFrame {
@@ -165,6 +179,8 @@ export interface ResultFrame {
     ms: number;
     memory: number;
     rolledBack?: boolean | null;
+    /** Side effects were faked (true), asked for but not possible here (false), or not asked for. */
+    faked?: boolean | null;
     ended?: 'exit' | 'dd' | null;
     sessionReset?: boolean;
 }
@@ -188,8 +204,6 @@ export interface ErrorFrame {
     file?: string | null;
     errorLine?: number;
     frames?: TraceFrame[];
-    /** Legacy workers sent a plain trace string. */
-    trace?: string;
     ms: number;
 }
 
@@ -323,18 +337,28 @@ export function encodeRequest(request: WorkerRequest): string {
  * Tolerates CRLF line endings so Windows and WSL transports work unchanged.
  */
 export class LineDecoder {
-    private buffer = '';
+    /** Pieces of the unfinished last line, joined only once its newline arrives. */
+    private pending: string[] = [];
 
+    /** Only the new chunk is scanned, so a large frame arriving in many chunks costs linear time. */
     push(chunk: string): string[] {
-        this.buffer += chunk;
-        const lines = this.buffer.split('\n');
-        this.buffer = lines.pop() ?? '';
+        const parts = chunk.split('\n');
+        const rest = parts.pop() ?? '';
+        const lines: string[] = [];
+
+        if (parts.length > 0) {
+            this.pending.push(parts[0]);
+            lines.push(this.pending.join(''), ...parts.slice(1));
+            this.pending = [];
+        }
+
+        if (rest !== '') this.pending.push(rest);
 
         return lines.map((line) => (line.endsWith('\r') ? line.slice(0, -1) : line));
     }
 
     reset(): void {
-        this.buffer = '';
+        this.pending = [];
     }
 }
 

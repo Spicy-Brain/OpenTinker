@@ -37,6 +37,39 @@ describe('LineDecoder', () => {
         decoder.reset();
         expect(decoder.push('{"a":1}\n')).toEqual(['{"a":1}']);
     });
+
+    it('keeps the blank separator lines the worker writes between frames', () => {
+        expect(new LineDecoder().push('\n{"a":1}\n\n{"b":2}\n')).toEqual([
+            '',
+            '{"a":1}',
+            '',
+            '{"b":2}',
+        ]);
+    });
+
+    it('joins a line split across many chunks, including a CRLF split in two', () => {
+        const decoder = new LineDecoder();
+        expect(decoder.push('{"a"')).toEqual([]);
+        expect(decoder.push(':')).toEqual([]);
+        expect(decoder.push('1}\r')).toEqual([]);
+        expect(decoder.push('\n{"b":2}\n{"c"')).toEqual(['{"a":1}', '{"b":2}']);
+        expect(decoder.push(':3}\n')).toEqual(['{"c":3}']);
+    });
+
+    it('decodes a large frame arriving in small chunks in linear time', () => {
+        const frame = `{"type":"value","html":"${'x'.repeat(30 * 1024 * 1024)}"}`;
+        const decoder = new LineDecoder();
+        const lines: string[] = [];
+        const started = performance.now();
+        for (let i = 0; i < frame.length; i += 65536) {
+            lines.push(...decoder.push(frame.slice(i, i + 65536)));
+        }
+        lines.push(...decoder.push('\n'));
+        // Re-splitting the whole buffer on every chunk took about 2 s here.
+        expect(performance.now() - started).toBeLessThan(1000);
+        expect(lines).toHaveLength(1);
+        expect(lines[0]).toHaveLength(frame.length);
+    });
 });
 
 describe('requests and frames', () => {

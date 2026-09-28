@@ -1,26 +1,74 @@
 name: Release
 
+# Verifies and packages the extension when a version tag is pushed. It does not
+# publish anything: download the VSIX from this run's artifacts and upload it to
+# the Visual Studio Marketplace and Open VSX by hand (docs/store-release-plan.md).
+
 on:
     push:
         tags:
             - 'v*'
+    workflow_dispatch:
+
+permissions:
+    contents: read
 
 jobs:
-    publish:
+    package:
+        name: Verify, package and smoke-test the VSIX
         runs-on: ubuntu-latest
         steps:
             - uses: actions/checkout@v4
             - uses: actions/setup-node@v4
               with:
-                  node-version: 20
+                  node-version: 24
                   cache: npm
-            - run: npm install
+            - uses: shivammathur/setup-php@v2
+              with:
+                  php-version: '8.4'
+                  extensions: pcntl, posix, pdo_sqlite
+                  tools: composer
+            - run: npm ci
+
+            - name: Tag matches package.json version
+              if: startsWith(github.ref, 'refs/tags/')
+              run: |
+                  version=$(node -p "require('./package.json').version")
+                  if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+                      echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $version"
+                      exit 1
+                  fi
+
+            - run: npm run typecheck
+            - run: npm run lint
+            - run: npm run format:check
+            - run: npm test
             - run: npm run build
-            - name: Publish to Visual Studio Marketplace
-              run: npx vsce publish --no-dependencies -p "$VSCE_PAT"
-              env:
-                  VSCE_PAT: ${{ secrets.VSCE_PAT }}
-            - name: Publish to Open VSX
-              run: npx ovsx publish --no-dependencies -p "$OVSX_PAT"
-              env:
-                  OVSX_PAT: ${{ secrets.OVSX_PAT }}
+            - run: php -l dist/worker.php
+            - run: php test/workerFeatures.php
+
+            - name: Package
+              run: |
+                  file="opentinker-$(node -p "require('./package.json').version").vsix"
+                  npx vsce package --no-dependencies --out "$file"
+                  echo "VSIX=$file" >> "$GITHUB_ENV"
+            - name: Check VSIX contents
+              run: node scripts/check-vsix.mjs "$VSIX"
+
+            # Runs the end-to-end suite against the unzipped VSIX, so the exact
+            # artifact that gets uploaded is the one that was tested.
+            - name: Create a throwaway Laravel app
+              run: |
+                  composer config --global policy.advisories.block false
+                  composer create-project laravel/laravel app --no-interaction --prefer-dist --quiet
+                  cd app && php artisan migrate --force --no-interaction
+            - name: Smoke-test the packaged extension
+              run: |
+                  unzip -q "$VSIX" -d vsix
+                  xvfb-run -a node test/e2e/run.mjs "$PWD/app" --reset --extension="$PWD/vsix/extension"
+
+            - uses: actions/upload-artifact@v4
+              with:
+                  name: ${{ env.VSIX }}
+                  path: ${{ env.VSIX }}
+                  if-no-files-found: error

@@ -6,6 +6,7 @@ import type {
     HtmlPreview,
     ModelCard,
     QueryRecord,
+    SideEffect,
     SqlSummary,
     TableValue,
     TraceFrame,
@@ -76,20 +77,6 @@ export function copyMenu(ctx: Ctx, options: CopyOption[]): HTMLElement {
     const wrap = h('span', { class: 'copy-menu' });
     const menu = h('div', { class: 'menu', attrs: { role: 'menu' } });
     menu.hidden = true;
-    for (const option of options) {
-        menu.append(
-            button(
-                option.label,
-                () => {
-                    menu.hidden = true;
-                    if (option.save)
-                        ctx.post({ kind: 'save', filename: option.save, content: option.value() });
-                    else ctx.post({ kind: 'copy', text: option.value() });
-                },
-                { class: 'menu-item' },
-            ),
-        );
-    }
     const trigger = button(
         options.length > 1 ? 'Copy ▾' : `Copy ${options[0]?.label.toLowerCase() ?? ''}`.trim(),
         () => {
@@ -98,10 +85,39 @@ export function copyMenu(ctx: Ctx, options: CopyOption[]): HTMLElement {
                 if (only) ctx.post({ kind: 'copy', text: only.value() });
                 return;
             }
-            menu.hidden = !menu.hidden;
+            setOpen(menu.hidden);
         },
         { title: 'Copy this value' },
     );
+    const setOpen = (open: boolean): void => {
+        menu.hidden = !open;
+        trigger.setAttribute('aria-expanded', String(open));
+        if (open) (menu.firstElementChild as HTMLElement | null)?.focus();
+    };
+    for (const option of options) {
+        const item = button(
+            option.label,
+            () => {
+                setOpen(false);
+                if (option.save)
+                    ctx.post({ kind: 'save', filename: option.save, content: option.value() });
+                else ctx.post({ kind: 'copy', text: option.value() });
+            },
+            { class: 'menu-item' },
+        );
+        item.setAttribute('role', 'menuitem');
+        menu.append(item);
+    }
+    if (options.length > 1) {
+        trigger.setAttribute('aria-haspopup', 'menu');
+        trigger.setAttribute('aria-expanded', 'false');
+    }
+    menu.addEventListener('keydown', (event) => {
+        if (event.key !== 'Escape') return;
+        event.stopPropagation();
+        setOpen(false);
+        trigger.focus();
+    });
     wrap.append(trigger, menu);
     trackMenu(wrap, menu);
     return wrap;
@@ -112,23 +128,26 @@ export function valueView(ctx: Ctx, frame: DumpFrame | ValueFrame): HTMLElement 
     const section = h('div', { class: `value-item ${frame.type}` });
     const views: Array<{ name: string; build: () => HTMLElement }> = [];
 
+    // The most useful view comes first and opens by default: a model's card, a
+    // collection's table, a mailable or response rendered. The dump is always there.
+    const preview = frame.preview?.html ? frame.preview : undefined;
+    const rendered = preview
+        ? { name: previewLabel(preview), build: () => previewView(preview) }
+        : undefined;
     if (frame.model)
         views.push({ name: 'Model', build: () => modelView(frame.model as ModelCard) });
-    views.push({ name: 'Dump', build: () => dumpView(frame.html) });
     if (frame.table?.columns.length && frame.table.rows.length)
         views.push({ name: 'Table', build: () => tableView(frame.table as TableValue) });
-    if (frame.preview?.html)
-        views.push({
-            name: previewLabel(frame.preview),
-            build: () => previewView(frame.preview as HtmlPreview),
-        });
+    if (rendered && preview?.kind !== 'html') views.push(rendered);
+    views.push({ name: 'Dump', build: () => dumpView(frame.html) });
+    if (rendered && preview?.kind === 'html') views.push(rendered);
 
     const body = h('div', { class: 'value-body' });
     const built = new Map<string, HTMLElement>();
-    const tabs = h('div', { class: 'view-tabs', attrs: { role: 'tablist' } });
+    const tabs = h('div', { class: 'view-tabs', attrs: { role: 'group', 'aria-label': 'View' } });
     const show = (name: string): void => {
         for (const tab of tabs.children)
-            tab.setAttribute('aria-selected', String(tab.textContent === name));
+            tab.setAttribute('aria-pressed', String(tab.textContent === name));
         let view = built.get(name);
         if (!view) {
             view = views.find((item) => item.name === name)?.build() ?? h('div');
@@ -143,7 +162,7 @@ export function valueView(ctx: Ctx, frame: DumpFrame | ValueFrame): HTMLElement 
                 h('button', {
                     class: 'view-tab',
                     text: view.name,
-                    attrs: { type: 'button', role: 'tab', 'aria-selected': 'false' },
+                    attrs: { type: 'button', 'aria-pressed': 'false' },
                     on: { click: () => show(view.name) },
                 }),
             );
@@ -307,18 +326,41 @@ export function tableView(table: TableValue): HTMLElement {
     return wrap;
 }
 
+const REMOTE_IMAGE = /(?:src|srcset|background)\s*=\s*["']?\s*https:|url\(\s*["']?\s*https:/i;
+
+/**
+ * HTML in a sandboxed frame with no scripts. Remote images stay blocked until
+ * asked for: in an email they can be tracking pixels that tell the sender it
+ * was opened, from where.
+ */
 export function previewView(preview: HtmlPreview): HTMLElement {
     const frame = h('iframe', {
         class: 'preview',
         attrs: { sandbox: '', title: previewLabel(preview) + ' preview' },
     });
-    const policy = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data: https:; font-src data:">`;
-    frame.srcdoc = policy + preview.html;
-    return frame;
+    const load = (remoteImages: boolean): void => {
+        const images = remoteImages ? 'data: https:' : 'data:';
+        frame.srcdoc = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src ${images}; font-src data:">${preview.html}`;
+    };
+    load(false);
+    if (!REMOTE_IMAGE.test(preview.html)) return frame;
+
+    const note = h('div', { class: 'preview-note muted' }, 'Remote images are blocked. ');
+    note.append(
+        button(
+            'Load remote images',
+            () => {
+                load(true);
+                note.remove();
+            },
+            { title: 'Remote images can tell the sender that this was opened' },
+        ),
+    );
+    return h('div', { class: 'preview-wrap' }, note, frame);
 }
 
 export function errorView(ctx: Ctx, frame: ErrorFrame | FatalFrame): HTMLElement {
-    const box = h('div', { class: 'error-box', attrs: { role: 'alert' } });
+    const box = h('div', { class: 'error-box' });
 
     if (frame.type === 'fatal') {
         box.append(h('div', { class: 'error-message', text: frame.message }));
@@ -375,17 +417,6 @@ export function errorView(ctx: Ctx, frame: ErrorFrame | FatalFrame): HTMLElement
         );
     }
 
-    if (!frames.length && frame.trace) {
-        box.append(
-            h(
-                'details',
-                {},
-                h('summary', { text: 'Stack trace' }),
-                h('pre', { class: 'output', text: frame.trace }),
-            ),
-        );
-    }
-
     const copyText = [
         `${frame.errorClass}: ${frame.message}`,
         ...frames
@@ -417,6 +448,67 @@ function traceItem(ctx: Ctx, item: TraceFrame): HTMLElement {
               })
             : null,
     );
+}
+
+const SIDE_EFFECT_NAMES: Record<SideEffect['kind'], [string, string]> = {
+    mail: ['email', 'emails'],
+    notification: ['notification', 'notifications'],
+    job: ['job', 'jobs'],
+    http: ['HTTP request', 'HTTP requests'],
+};
+
+/** What a statement would have sent, captured by fakes instead. */
+export function sideEffectsView(effects: SideEffect[]): HTMLElement | null {
+    if (!effects.length) return null;
+    const counts = new Map<SideEffect['kind'], number>();
+    for (const effect of effects) counts.set(effect.kind, (counts.get(effect.kind) ?? 0) + 1);
+
+    const details = h('details', { class: 'side-effects' });
+    details.open = true;
+    details.append(
+        h(
+            'summary',
+            {},
+            h('span', { class: 'side-effects-label', text: 'Faked' }),
+            ` ${[...counts].map(([kind, count]) => `${count} ${SIDE_EFFECT_NAMES[kind][count === 1 ? 0 : 1]}`).join(' · ')}`,
+        ),
+    );
+
+    const list = h('ul', { class: 'side-effect-list' });
+    for (const effect of effects) {
+        const item = h(
+            'li',
+            { class: `side-effect ${effect.kind}` },
+            h('span', {
+                class: 'badge',
+                text: effect.kind === 'http' ? 'HTTP' : SIDE_EFFECT_NAMES[effect.kind][0],
+            }),
+            h('span', { class: 'side-effect-summary', text: effect.summary }),
+        );
+        const html = effect.html;
+        if (html) {
+            let preview: HTMLElement | undefined;
+            const toggle = button(
+                'Preview',
+                () => {
+                    if (preview) {
+                        preview.remove();
+                        preview = undefined;
+                        toggle.textContent = 'Preview';
+                        return;
+                    }
+                    preview = previewView({ kind: 'mailable', html });
+                    item.append(preview);
+                    toggle.textContent = 'Hide preview';
+                },
+                { title: 'Show the email that would have been sent' },
+            );
+            item.append(toggle);
+        }
+        list.append(item);
+    }
+    details.append(list);
+    return details;
 }
 
 export function sqlView(

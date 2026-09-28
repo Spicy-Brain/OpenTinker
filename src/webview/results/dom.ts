@@ -33,10 +33,11 @@ export function h<K extends keyof HTMLElementTagNameMap>(
 export function button(
     label: string,
     onClick: (event: Event) => void,
-    options: { class?: string; title?: string; icon?: string } = {},
+    options: { class?: string; title?: string } = {},
 ): HTMLButtonElement {
-    const element = h('button', {
+    return h('button', {
         class: options.class ?? 'link-button',
+        text: label,
         title: options.title,
         attrs: { type: 'button' },
         on: {
@@ -47,15 +48,6 @@ export function button(
             },
         },
     });
-    if (options.icon)
-        element.append(
-            h('span', {
-                class: `codicon codicon-${options.icon}`,
-                attrs: { 'aria-hidden': 'true' },
-            }),
-        );
-    element.append(label);
-    return element;
 }
 
 export function shortClass(name: string): string {

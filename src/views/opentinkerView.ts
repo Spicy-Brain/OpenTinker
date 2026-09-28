@@ -146,6 +146,8 @@ export class OpenTinkerViewProvider implements vscode.TreeDataProvider<OpenTinke
 
     async getChildren(element?: OpenTinkerTreeItem): Promise<OpenTinkerTreeItem[]> {
         if (!element) {
+            // No folder open: an empty tree shows the "Open Folder" welcome instead.
+            if (!this.scratch) return [];
             const target = this.source.target();
             return [
                 new TargetItem(

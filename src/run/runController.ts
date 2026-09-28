@@ -37,6 +37,8 @@ export interface RunRequest {
 export interface RunSettings {
     sessionMode: 'fresh' | 'keep';
     rollback: boolean;
+    /** Fake mail, notifications, jobs and HTTP calls. */
+    fake: boolean;
     timeoutMs: number;
     maxOutputBytes: number;
     confirmPolicy: ConfirmPolicy;
@@ -61,6 +63,8 @@ export interface ActiveRun {
     frames: RunFrame[];
     outputBytes: number;
     truncated: boolean;
+    /** More frames arrived than are kept for replay and history. */
+    capped: boolean;
 }
 
 export interface FinishedRun {
@@ -74,6 +78,15 @@ export interface FinishedRun {
 export class NoTargetError extends Error {
     constructor() {
         super('Choose where OpenTinker should run code.');
+    }
+}
+
+/** Faking side effects was asked for, but this target's app can't do it. */
+export class FakesUnavailableError extends Error {
+    constructor(target: Target) {
+        super(
+            `${target.name} can't fake mail, notifications, jobs or HTTP calls (that needs Laravel). Turn off Fake Side Effects to run here.`,
+        );
     }
 }
 
@@ -145,6 +158,10 @@ export class RunController {
             this.startingSession = session;
             await session.ensureStarted();
 
+            // Never let a run send real mail because the fakes silently weren't there.
+            if (settings.fake && !session.capabilities.fakes)
+                throw new FakesUnavailableError(target);
+
             const environment = this.environment(target);
             if (isProduction(environment) || isProduction(target.environment)) {
                 const prompt = productionPrompt(request.code, settings.confirmPolicy);
@@ -189,13 +206,21 @@ export class RunController {
             environment: this.environment(target),
             sessionMode: settings.sessionMode,
             rollback: settings.rollback,
+            fake: settings.fake,
             at: Date.now(),
             ms: 0,
             ok: false,
             statements: 0,
         };
 
-        const active: ActiveRun = { record, target, frames: [], outputBytes: 0, truncated: false };
+        const active: ActiveRun = {
+            record,
+            target,
+            frames: [],
+            outputBytes: 0,
+            truncated: false,
+            capped: false,
+        };
         this.active = active;
         this.activeSession = session;
         this.setState('running');
@@ -221,6 +246,7 @@ export class RunController {
                 imports,
                 fresh: settings.sessionMode === 'fresh',
                 rollback: settings.rollback,
+                fake: settings.fake,
             });
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
@@ -387,6 +413,14 @@ export class RunController {
             frame.type === 'fatal'
         ) {
             active.frames.push(frame);
+        } else if (!active.capped) {
+            // The live view shows everything; say so where the rest goes missing.
+            active.capped = true;
+            active.frames.push({
+                type: 'output',
+                id: active.record.id,
+                text: `[OpenTinker] Only the first ${MAX_STORED_FRAMES} results are kept for history. The live view showed them all.\n`,
+            });
         }
         this.onDidReceiveFrame.fire({ run: active, frame });
     }
@@ -402,6 +436,7 @@ export class RunController {
         record.ok = result.ok;
         record.statements = result.statements ?? 0;
         record.rolledBack = result.rolledBack ?? null;
+        record.faked = result.faked ?? null;
         record.ended = result.stopped ? 'stopped' : (result.ended ?? null);
 
         const previous = record.key ? this.host.previousSignatures(record.key) : undefined;

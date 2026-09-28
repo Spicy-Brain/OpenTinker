@@ -1,9 +1,21 @@
 import { spawn } from 'node:child_process';
-import { chmod, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import {
+    chmod,
+    mkdir,
+    mkdtemp,
+    readdir,
+    readFile,
+    rm,
+    stat,
+    symlink,
+    writeFile,
+} from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+    buildContainerUploadCommand,
+    buildContainerWorkerCommand,
     buildRemoteWorkerCommand,
     buildSshArgs,
     buildUploadCommand,
@@ -107,6 +119,77 @@ describe('SSH command construction', () => {
                 ]);
             } finally {
                 await rm(home, { recursive: true, force: true });
+            }
+        },
+    );
+});
+
+describe('container command construction', () => {
+    it('uploads into a per-user private directory through a temporary file', () => {
+        const command = buildContainerUploadCommand('abc123');
+        expect(command).toContain('umask 077');
+        expect(command).toContain('\'/tmp\'"/opentinker-$(id -u)"');
+        expect(command).toContain('[ ! -L "$d" ] && [ -O "$d" ]');
+        expect(command).toContain('mktemp');
+        expect(command).toContain('mv -f "$tmp" "$d/worker-abc123.php"');
+    });
+
+    it.skipIf(process.platform === 'win32')(
+        'uploads privately and runs the quoted worker command in a shell',
+        async () => {
+            const root = await mkdtemp(path.join(os.tmpdir(), "opentinker container '"));
+            try {
+                const workerSource = '<?php echo "worker";\n';
+                await runShell(buildContainerUploadCommand('abc123', root), root, workerSource);
+                const dir = path.join(root, `opentinker-${process.getuid?.()}`);
+                const worker = path.join(dir, 'worker-abc123.php');
+                expect(await readFile(worker, 'utf8')).toBe(workerSource);
+                expect((await stat(dir)).mode & 0o777).toBe(0o700);
+                expect((await stat(worker)).mode & 0o777).toBe(0o600);
+                expect(await readdir(dir)).toEqual(['worker-abc123.php']);
+
+                const argsFile = path.join(root, 'args.txt');
+                const fakePhp = path.join(root, "php's binary");
+                await writeFile(
+                    fakePhp,
+                    `#!/bin/sh\nprintf '%s\\n' "$@" > ${shellQuote(argsFile)}\n`,
+                );
+                await chmod(fakePhp, 0o700);
+                await runShell(
+                    buildContainerWorkerCommand(
+                        'abc123',
+                        fakePhp,
+                        target.workingDir,
+                        'laravel',
+                        root,
+                    ),
+                    root,
+                );
+                expect((await readFile(argsFile, 'utf8')).trimEnd().split('\n')).toEqual([
+                    worker,
+                    `--base-path=${target.workingDir}`,
+                    '--bootstrap=laravel',
+                ]);
+            } finally {
+                await rm(root, { recursive: true, force: true });
+            }
+        },
+    );
+
+    it.skipIf(process.platform === 'win32')(
+        'refuses a worker directory that is a symlink',
+        async () => {
+            const root = await mkdtemp(path.join(os.tmpdir(), 'opentinker-container-'));
+            try {
+                const elsewhere = path.join(root, 'elsewhere');
+                await mkdir(elsewhere);
+                await symlink(elsewhere, path.join(root, `opentinker-${process.getuid?.()}`));
+                await expect(
+                    runShell(buildContainerUploadCommand('abc123', root), root, 'x'),
+                ).rejects.toThrow(/refusing to use/);
+                expect(await readdir(elsewhere)).toEqual([]);
+            } finally {
+                await rm(root, { recursive: true, force: true });
             }
         },
     );

@@ -50,7 +50,6 @@ export function activate(context: vscode.ExtensionContext): OpenTinkerApp | unde
     command('opentinker.tinkerModel', (className: string) => current.tinkerModel(className));
 
     command('opentinker.selectTarget', () => current.selectTarget());
-    command('opentinker.selectConnection', () => current.selectTarget());
     command('opentinker.selectTargetForFile', (uri?: vscode.Uri) =>
         current.selectTarget(uri ?? vscode.window.activeTextEditor?.document.uri),
     );
@@ -62,6 +61,7 @@ export function activate(context: vscode.ExtensionContext): OpenTinkerApp | unde
 
     command('opentinker.toggleSessionMode', () => current.toggleSessionMode());
     command('opentinker.toggleRollback', () => current.toggleRollback());
+    command('opentinker.toggleFakes', () => current.toggleFakes());
     command('opentinker.restartSession', () => current.restartSession());
 
     command('opentinker.saveSnippet', () => current.saveSnippet());
@@ -73,6 +73,13 @@ export function activate(context: vscode.ExtensionContext): OpenTinkerApp | unde
     command('opentinker.clearHistory', () => current.clearHistory());
 
     command('opentinker.doctor', () => current.doctor());
+    command('opentinker.getStarted', () =>
+        vscode.commands.executeCommand(
+            'workbench.action.openWalkthrough',
+            `${context.extension.id}#getStarted`,
+            false,
+        ),
+    );
     command('opentinker.generateModelHints', () => current.generateModelHints());
     command('opentinker.showLogs', () => current.showLogs());
     command('opentinker.stopLogs', () => current.stopLogs());

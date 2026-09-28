@@ -48,7 +48,7 @@ final class Worker
 
     public function send(array $request): void
     {
-        fwrite($this->pipes[0], json_encode($request) . "\n");
+        @fwrite($this->pipes[0], json_encode($request) . "\n"); // The worker may already be gone.
         fflush($this->pipes[0]);
     }
 
@@ -62,6 +62,9 @@ final class Worker
             while (($pos = strpos($this->buffer, "\n")) !== false) {
                 $line = substr($this->buffer, 0, $pos);
                 $this->buffer = substr($this->buffer, $pos + 1);
+                if (trim($line) === '') {
+                    continue; // Frames start on a fresh line; decoders skip the blank ones.
+                }
                 $frame = json_decode($line, true);
                 if (! is_array($frame)) {
                     $frame = ['type' => 'raw', 'text' => $line];
@@ -102,10 +105,19 @@ final class Worker
         return $this->until(fn (array $f) => ($f['id'] ?? null) === $id && $f['type'] !== 'output', 30);
     }
 
+    public function closeInput(): void
+    {
+        if (is_resource($this->pipes[0])) {
+            fclose($this->pipes[0]);
+        }
+    }
+
     public function close(): void
     {
-        $this->send(['type' => 'shutdown']);
-        fclose($this->pipes[0]);
+        if (is_resource($this->pipes[0])) {
+            $this->send(['type' => 'shutdown']);
+        }
+        $this->closeInput();
         proc_close($this->process);
     }
 }
@@ -127,6 +139,8 @@ function check(string $name, bool $ok, mixed $detail = null): void
 
 function result(array $frames): array { return end($frames); }
 function ofType(array $frames, string $type): array { return array_values(array_filter($frames, fn ($f) => $f['type'] === $type)); }
+function lastOf(array $frames, string $type): array { $all = ofType($frames, $type); return end($all) ?: []; }
+function printed(array $frames): string { return implode('', array_column(ofType($frames, 'output'), 'text')); }
 
 $worker = new Worker($command);
 $ready = $worker->ready;
@@ -134,6 +148,31 @@ echo "Worker: PHP {$ready['php']}, " . ($ready['laravel'] ? "Laravel {$ready['la
 check('handshake reports protocol 2', ($ready['protocol'] ?? null) === 2, $ready);
 $fork = (bool) ($ready['capabilities']['fork'] ?? false);
 check('parser available', (bool) ($ready['capabilities']['parser'] ?? false), $ready);
+
+if (isset($options['base-path']) && ! isset($options['command']) && DIRECTORY_SEPARATOR === '/') {
+    // Older workers used a predictable PsySH config dir in the shared temp dir,
+    // so anyone could plant a config.php there. Plant one and prove it never runs.
+    $tmp = sys_get_temp_dir() . '/opentinker-it-' . bin2hex(random_bytes(4));
+    mkdir($tmp, 0700);
+    $marker = "{$tmp}/planted-config-ran";
+    $legacy = "{$tmp}/opentinker-" . substr(sha1(rtrim($options['base-path'], '/\\')), 0, 12);
+    mkdir($legacy);
+    file_put_contents("{$legacy}/config.php", '<?php touch(' . var_export($marker, true) . '); return [];');
+    $isolated = new Worker('TMPDIR=' . escapeshellarg($tmp) . ' ' . $command);
+    $probe = $isolated->run('1 + 1;');
+    $private = array_values(array_diff(glob("{$tmp}/opentinker-*", GLOB_ONLYDIR) ?: [], [$legacy]));
+    check(
+        'a config.php planted in the shared temp dir never runs',
+        result($probe)['ok'] && ! file_exists($marker) && count($private) === 1 && (fileperms($private[0]) & 0777) === 0700,
+        [$private, file_exists($marker)],
+    );
+    $isolated->close();
+    check('the private temp dir is removed on shutdown', (glob("{$tmp}/opentinker-*") ?: []) === [$legacy], glob("{$tmp}/*"));
+    @unlink("{$legacy}/config.php");
+    @unlink($marker);
+    @rmdir($legacy);
+    @rmdir($tmp);
+}
 
 $imports = $laravel ? "use Illuminate\\Support\\Str;\nuse Illuminate\\Support\\{Arr, Collection as Coll};\n" : "";
 $scratch = "<?php\n{$imports}\$greeting = 'hi';\n" . ($laravel ? "Str::upper(\$greeting) . Arr::first([1]);\n" : "strtoupper(\$greeting);\n");
@@ -161,7 +200,9 @@ if ($fork) {
     check('exit() in called code ends the run cleanly', result($exit)['ok'] && (result($exit)['ended'] ?? null) === 'exit', $exit);
     check('output before exit() is kept', str_contains(json_encode($exit), 'before') && ! str_contains(json_encode($exit), 'after'), $exit);
 
-    $fatal = $worker->run("ini_set('memory_limit', '32M');\n\$big = str_repeat('x', 64 * 1024 * 1024);");
+    // The limit sits just above what the run already uses, so the fatal comes from the run itself.
+    $exhaust = "ini_set('memory_limit', (string) (memory_get_usage(true) + 16 * 1024 * 1024));\n\$big = str_repeat('x', 64 * 1024 * 1024);";
+    $fatal = $worker->run($exhaust);
     $error = ofType($fatal, 'error')[0] ?? [];
     check('a fatal error in a run is reported, not fatal to the worker', ! result($fatal)['ok'] && str_contains($error['message'] ?? '', 'memory'), $fatal);
     check('fatal error points at the right line', ($error['line'] ?? null) === 2, $error);
@@ -184,6 +225,12 @@ $keptImports = $worker->run($scratch, ['fresh' => false]);
 $keptImportsAgain = $worker->run($scratch, ['fresh' => false]);
 check('keep-session tolerates re-declared imports', result($keptImports)['ok'] && result($keptImportsAgain)['ok'], $keptImportsAgain);
 
+// Requests reach the kept session over a socket whose buffer is 8 KB on macOS;
+// a larger request used to be cut short and the run never started.
+$bigKept = $worker->run("<?php\n\$big = '" . str_repeat('x', 100_000) . "';\nstrlen(\$big);", ['fresh' => false]);
+$bigValues = ofType($bigKept, 'value');
+check('a keep-session run larger than the socket buffer arrives whole', result($bigKept)['ok'] && (end($bigValues)['short'] ?? null) === '100000', result($bigKept));
+
 if ($fork) {
     $freshAfterKept = $worker->run("isset(\$kept) ? 'leaked' : 'isolated';");
     check('fresh runs stay isolated from the kept session', (ofType($freshAfterKept, 'value')[0]['short'] ?? null) === 'isolated', $freshAfterKept);
@@ -195,7 +242,7 @@ if ($fork) {
     $afterReset = $worker->run("isset(\$kept) ? 'kept' : 'cleared';", ['fresh' => false]);
     check('restart clears the kept session without re-booting', ($reset['ok'] ?? false) && (ofType($afterReset, 'value')[0]['short'] ?? null) === 'cleared', [$reset, $afterReset]);
 
-    $keptFatal = $worker->run("ini_set('memory_limit', '32M');\n\$big = str_repeat('x', 64 * 1024 * 1024);", ['fresh' => false]);
+    $keptFatal = $worker->run($exhaust, ['fresh' => false]);
     check('a fatal error resets the kept session and says so', (result($keptFatal)['sessionReset'] ?? false) && str_contains(ofType($keptFatal, 'error')[0]['message'] ?? '', 'reset'), $keptFatal);
 }
 
@@ -229,6 +276,31 @@ check('each run reports the variables it left', array_column($scopeFrame['vars']
 $group = $worker->run("<?php\nuse Psy\\{Shell, Configuration as Config};\nShell::class;");
 check('group imports split and run', result($group)['ok'] && (ofType($group, 'value')[0]['short'] ?? null) === 'Psy\\Shell', $group);
 
+// Showing a value must not use it up: a generator stays iterable.
+$generator = $worker->run("<?php\n\$g = (function () { yield 1; yield 2; })();\niterator_to_array(\$g);");
+check('a generator shown as a value can still be iterated', result($generator)['ok'] && (lastOf($generator, 'value')['short'] ?? null) === 'array(2)', $generator);
+
+$warning = $worker->run("<?php\n\$a = [];\n\$a['missing'];\ntrigger_error('an old api', E_USER_DEPRECATED);\n'done';");
+check('PHP warnings reach the results, deprecations do not', result($warning)['ok'] && str_contains(printed($warning), 'Undefined array key') && ! str_contains(printed($warning), 'an old api'), $warning);
+
+$caughtDd = $worker->run("<?php\ntry { dd('x'); } catch (Exception \$e) { echo 'caught'; }\necho 'after';");
+$caughtExit = $worker->run("<?php\ntry { exit; } catch (Throwable \$e) { echo 'swallowed'; }\necho 'after';");
+check(
+    'catch blocks in scratch code cannot keep a run going past dd() or exit',
+    (result($caughtDd)['ended'] ?? null) === 'dd' && ! str_contains(printed($caughtDd), 'caught') && ! str_contains(printed($caughtDd), 'after')
+        && (result($caughtExit)['ended'] ?? null) === 'exit' && ! str_contains(printed($caughtExit), 'after'),
+    [$caughtDd, $caughtExit],
+);
+
+$bareExit = $worker->run("<?php\n\$x = 0;\n\$y = match (\$x) { 0 => exit, default => [\$x ?: exit, 1] };\necho 'after';");
+check('a bare exit inside an expression ends the run', result($bareExit)['ok'] && (result($bareExit)['ended'] ?? null) === 'exit' && ! str_contains(printed($bareExit), 'after'), $bareExit);
+
+$stringable = $worker->run("<?php\n\$o = new class implements Stringable { public function __toString(): string { throw new RuntimeException('no'); } };\n'next';");
+check('a value that fails to display does not fail the run', result($stringable)['ok'] && (lastOf($stringable, 'value')['short'] ?? null) === 'next', $stringable);
+
+$stray = $worker->run("<?php\nfwrite(STDOUT, 'progress');\n1 + 1;");
+check('bytes written straight to stdout cannot swallow a frame', result($stray)['ok'] && array_column(ofType($stray, 'value'), 'short') === ['8', '2'], $stray);
+
 if ($laravel) {
     $model = $worker->run("new App\\Models\\User(['name' => 'Ada', 'email' => 'ada@example.com']);");
     $card = ofType($model, 'value')[0]['model'] ?? [];
@@ -241,14 +313,105 @@ if ($laravel) {
     if ($writes && ($ready['capabilities']['database'] ?? false)) {
         $worker->run("Schema::hasTable('opentinker_probe') || Schema::create('opentinker_probe', function (\$t) { \$t->id(); });");
         $before = ofType($worker->run("DB::table('opentinker_probe')->count();"), 'value')[0]['short'] ?? 'x';
-        $rolled = $worker->run("DB::table('opentinker_probe')->insert([]);\nDB::table('opentinker_probe')->count();", ['rollback' => true]);
+        $rolled = $worker->run("DB::table('opentinker_probe')->insertGetId([]);\nDB::table('opentinker_probe')->count();", ['rollback' => true]);
         $after = ofType($worker->run("DB::table('opentinker_probe')->count();"), 'value')[0]['short'] ?? 'y';
         check('rollback mode undoes database writes', result($rolled)['rolledBack'] === true && $before === $after, [$before, $after, result($rolled)]);
+        $committed = $worker->run("DB::table('opentinker_probe')->insertGetId([]);\nDB::commit();", ['rollback' => true]);
+        $afterCommit = ofType($worker->run("DB::table('opentinker_probe')->count();"), 'value')[0]['short'] ?? 'z';
+        check(
+            'rollback mode reports a run that committed its own transaction',
+            result($committed)['rolledBack'] === false && str_contains(printed($committed), 'may have been saved') && $afterCommit === (string) ((int) $before + 1),
+            [$before, $afterCommit, $committed],
+        );
         $worker->run("Schema::dropIfExists('opentinker_probe');");
     }
 
+    // Nothing may count or iterate a lazy value to display it: a cursor would
+    // run its query and an endless LazyCollection would never finish.
+    $lazy = $worker->run("<?php\n\$users = App\\Models\\User::cursor();\n\$endless = Illuminate\\Support\\LazyCollection::make(function () { while (true) { yield 1; } });", ['timeout' => 15]);
+    check('cursors and lazy collections are shown without running them', result($lazy)['ok'] && (ofType($lazy, 'statement')[0]['sql']['total'] ?? -1) === 0, $lazy);
+
     $hints = result($worker->request('modelHints'));
     check('model hints describe real columns', ($hints['count'] ?? 0) >= 1 && str_contains($hints['php'] ?? '', '@property'), $hints);
+
+    // Fake side effects: nothing leaves the process, each statement says what it
+    // would have sent, and a kept session gets the real services back afterwards.
+    check('the handshake offers fakes', ($ready['capabilities']['fakes'] ?? null) === true, $ready);
+    $probe = "<?php\n\$services = [get_class(Bus::getFacadeRoot()), get_class(Queue::getFacadeRoot()), get_class(Notification::getFacadeRoot()), spl_object_id(Http::getFacadeRoot()), get_class(app('mail.manager')->mailer()->getSymfonyTransport())];\n(str_contains(implode(' ', \$services), 'Fake') ? 'fakes ' : 'real ') . md5(serialize(\$services));";
+    $realServices = lastOf($worker->run($probe, ['fresh' => false]), 'value')['short'] ?? 'x';
+    $fakeCode = <<<'PHP'
+<?php
+Mail::raw('Hello Ada', fn ($message) => $message->to('ada@example.com')->subject('Hi Ada'));
+Notification::route('mail', 'grace@example.com')->notify(new class extends Illuminate\Notifications\Notification { public function via($notifiable) { return ['mail']; } public function toMail($notifiable) { return (new Illuminate\Notifications\Messages\MailMessage)->line('Welcome, Grace'); } });
+dispatch(function () { throw new RuntimeException('a faked job must not run'); });
+Http::post('https://opentinker.invalid/charges', ['amount' => 5])->status();
+PHP;
+    foreach (['fresh' => true, 'kept-session' => false] as $mode => $fresh) {
+        $faked = $worker->run($fakeCode, ['fake' => true, 'fresh' => $fresh]);
+        $statements = ofType($faked, 'statement');
+        $effects = array_merge(...array_map(fn (array $statement) => $statement['sideEffects'] ?? [], $statements));
+        $summaries = implode(' | ', array_column($effects, 'summary'));
+        check(
+            "a {$mode} run with fakes reports what each statement would have sent",
+            result($faked)['ok'] && result($faked)['faked'] === true
+                && array_map(fn (array $statement) => array_column($statement['sideEffects'] ?? [], 'kind'), $statements) === [['mail'], ['notification'], ['job'], ['http']]
+                && str_contains($summaries, '"Hi Ada" to ada@example.com')
+                && str_contains($summaries, 'to grace@example.com via mail')
+                && str_contains($summaries, 'Closure job')
+                && str_contains($summaries, 'POST https://opentinker.invalid/charges')
+                && str_contains($effects[0]['html'] ?? '', 'Hello Ada')
+                && str_contains($effects[1]['html'] ?? '', 'Welcome, Grace')
+                && (lastOf($faked, 'value')['short'] ?? null) === '200'
+                && ! str_contains(json_encode($faked), 'must not run'),
+            $faked,
+        );
+    }
+    $lastDispatch = $worker->run("<?php\n1;\ndispatch(fn () => null);", ['fake' => true]);
+    check('a job dispatched on the last line is captured by that line', array_column(ofType($lastDispatch, 'statement')[1]['sideEffects'] ?? [], 'kind') === ['job'], $lastDispatch);
+    $afterFakes = lastOf($worker->run($probe, ['fresh' => false]), 'value')['short'] ?? 'y';
+    check('a kept session gets the real services back after a run with fakes', str_starts_with($realServices, 'real ') && $realServices === $afterFakes, [$realServices, $afterFakes]);
+}
+
+if (! $laravel) {
+    check('the handshake does not offer fakes without Laravel', ($ready['capabilities']['fakes'] ?? null) === false, $ready);
+    $refusedFake = $worker->run("<?php\necho 'ran';", ['fake' => true]);
+    check(
+        'a run with fakes on a project that cannot fake runs nothing',
+        ! result($refusedFake)['ok'] && result($refusedFake)['faked'] === false && ! str_contains(printed($refusedFake), 'ran')
+            && str_contains(ofType($refusedFake, 'error')[0]['message'] ?? '', 'nothing was run'),
+        $refusedFake,
+    );
+}
+
+if ($fork && isset($options['base-path']) && ! isset($options['command']) && function_exists('posix_kill')) {
+    // Children must not outlive the worker, whether it is signalled or its input closes.
+    foreach (['a termination signal' => SIGTERM, 'end of input' => null] as $how => $signal) {
+        $doomed = new Worker($command);
+        $sessionPid = (int) trim(printed($doomed->run('echo getmypid();', ['fresh' => false])));
+        $doomed->send(['type' => 'exec', 'id' => 'doomed', 'code' => "echo getmypid();\nsleep(30);", 'mode' => 'statements', 'fresh' => true]);
+        $runPid = (int) trim(printed($doomed->until(fn (array $f) => $f['type'] === 'output' && ctype_digit(trim($f['text'])), 10)));
+        $signal !== null ? posix_kill((int) $doomed->ready['pid'], $signal) : $doomed->closeInput();
+        $deadline = microtime(true) + 5;
+        while (microtime(true) < $deadline && (posix_kill($runPid, 0) || posix_kill($sessionPid, 0))) {
+            usleep(50_000);
+        }
+        check("run and kept-session processes end with the worker on {$how}", $runPid > 0 && $sessionPid > 0 && ! posix_kill($runPid, 0) && ! posix_kill($sessionPid, 0), [$runPid, $sessionPid]);
+        $doomed->close();
+    }
+}
+
+if ($fork && isset($options['base-path']) && ! isset($options['command']) && function_exists('posix_setrlimit') && function_exists('pcntl_exec') && posix_geteuid() !== 0) {
+    // With no processes left to fork, a run must fail rather than run inside the pristine worker.
+    $limit = 'posix_setrlimit(POSIX_RLIMIT_NPROC, 1, 1); pcntl_exec(PHP_BINARY, array_slice($argv, 1));';
+    $limited = new Worker(escapeshellarg(PHP_BINARY) . ' -r ' . escapeshellarg($limit) . ' -- ' . escapeshellarg($workerFile) . ' ' . escapeshellarg('--base-path=' . $options['base-path']));
+    $refused = $limited->run("echo 'ran';");
+    check(
+        'a run that cannot get a process fails instead of running in the worker',
+        ! result($refused)['ok'] && str_contains(ofType($refused, 'error')[0]['message'] ?? '', 'Could not start a process') && ! str_contains(printed($refused), 'ran')
+            && result($limited->request('ping'))['type'] === 'pong',
+        $refused,
+    );
+    $limited->close();
 }
 
 $worker->close();

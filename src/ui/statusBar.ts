@@ -8,6 +8,7 @@ export interface StatusInfo {
     state: RunState;
     sessionMode: 'fresh' | 'keep';
     rollback: boolean;
+    fake: boolean;
     booting: boolean;
     /** The active scratch file; the Run button only shows for scratch files. */
     scratchName?: string;
@@ -74,12 +75,14 @@ export class StatusBar implements vscode.Disposable {
 
         this.mode.text =
             (info.sessionMode === 'fresh' ? '$(refresh) Fresh' : '$(history) Keep session') +
-            (info.rollback ? ' · $(shield) Rollback' : '');
+            (info.rollback ? ' · $(shield) Rollback' : '') +
+            (info.fake ? ' · $(debug-disconnect) Fakes' : '');
         this.mode.tooltip =
             (info.sessionMode === 'fresh'
                 ? 'Each run starts from a freshly booted app. Click to keep variables between runs.'
                 : 'Variables carry over between runs. Click to start fresh each run.') +
-            (info.rollback ? '\nDatabase changes are rolled back after each run.' : '');
+            (info.rollback ? '\nDatabase changes are rolled back after each run.' : '') +
+            (info.fake ? '\nMail, notifications, jobs and HTTP calls are faked.' : '');
 
         const busy = state === 'running' || state === 'starting' || state === 'stopping';
         if (busy) {

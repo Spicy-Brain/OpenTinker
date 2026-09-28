@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { callableCode } from '../src/run/callable';
+import { callableCode, requiredParameterCount } from '../src/run/callable';
 
 describe('callableCode', () => {
     it('uses reflection and the Laravel container for class methods', () => {
@@ -26,5 +26,29 @@ describe('callableCode', () => {
                 line: 1,
             }),
         ).toThrow('Invalid callable name');
+    });
+});
+
+describe('requiredParameterCount', () => {
+    it('counts parameters without defaults', () => {
+        expect(requiredParameterCount('() {')).toBe(0);
+        expect(requiredParameterCount('(): Collection\n    {')).toBe(0);
+        expect(requiredParameterCount('(Request $request, int $id) {')).toBe(2);
+        expect(requiredParameterCount('(int $limit = 10, string ...$tags) {')).toBe(0);
+        expect(requiredParameterCount('(User $user, bool $force = false) {')).toBe(1);
+    });
+
+    it('ignores commas and brackets inside defaults, strings and attributes', () => {
+        expect(requiredParameterCount("(array $keys = ['a', 'b'], string $glue = ', ') {")).toBe(0);
+        expect(requiredParameterCount('(#[SensitiveParameter] string $password) {')).toBe(1);
+        expect(requiredParameterCount("(string $x = ')', $y = new Foo(1, 2)) {")).toBe(0);
+        expect(
+            requiredParameterCount('(\n        int $a,\n        ?string $b = null,\n    ) {'),
+        ).toBe(1);
+    });
+
+    it('gives up on text it cannot read', () => {
+        expect(requiredParameterCount('name() {')).toBeUndefined();
+        expect(requiredParameterCount('(int $a')).toBeUndefined();
     });
 });

@@ -20,6 +20,8 @@ export interface RunRecord {
     sessionMode?: 'fresh' | 'keep';
     rollback?: boolean;
     rolledBack?: boolean | null;
+    fake?: boolean;
+    faked?: boolean | null;
     ended?: 'exit' | 'dd' | 'stopped' | null;
     /** Per-statement output fingerprints, used to mark what changed next run. */
     signatures?: Record<string, string>;
@@ -44,8 +46,8 @@ export class RunStore {
 
     constructor(
         private readonly memento: vscode.Memento,
-        private readonly limit = DEFAULT_LIMIT,
-        private readonly persistResults = false,
+        private limit = DEFAULT_LIMIT,
+        private persistResults = false,
     ) {
         const saved = memento.get<unknown>(HISTORY_KEY);
         if (saved === undefined) {
@@ -74,7 +76,22 @@ export class RunStore {
                 const frames = saved[record.id];
                 if (Array.isArray(frames)) this.runs.set(record.id, frames);
             }
+        } else if (memento.get(RESULTS_KEY) !== undefined) {
+            // Results kept while the setting was on are app data; don't leave them behind.
+            void memento.update(RESULTS_KEY, undefined);
         }
+    }
+
+    /** Applies changed history settings. Turning persistence off deletes kept results. */
+    async configure(limit: number, persistResults: boolean): Promise<void> {
+        const stopPersisting = this.persistResults && !persistResults;
+        this.limit = limit;
+        this.persistResults = persistResults;
+        if (this.recent.length > limit) {
+            this.recent = this.recent.slice(0, limit);
+            await this.memento.update(HISTORY_KEY, this.recent);
+        }
+        if (stopPersisting) await this.memento.update(RESULTS_KEY, undefined);
     }
 
     async add(record: RunRecord, frames: RunFrame[]): Promise<void> {

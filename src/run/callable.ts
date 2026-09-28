@@ -7,6 +7,48 @@ export type CallableTarget = {
     line: number;
 };
 
+/**
+ * Counts the required parameters in a declaration's parameter list, given the
+ * source that follows the function name. Undefined when it cannot be parsed.
+ */
+export function requiredParameterCount(afterName: string): number | undefined {
+    const open = afterName.indexOf('(');
+    if (open < 0 || afterName.slice(0, open).trim() !== '') return undefined;
+    const parameters: string[] = [];
+    let current = '';
+    let depth = 0;
+    let quote = '';
+    for (let index = open + 1; index < afterName.length; index++) {
+        const char = afterName[index];
+        if (quote) {
+            current += char;
+            if (char === '\\') current += afterName[++index] ?? '';
+            else if (char === quote) quote = '';
+            continue;
+        }
+        if (char === '"' || char === "'") quote = char;
+        else if (char === '(' || char === '[' || char === '{') depth++;
+        else if (char === ')' || char === ']' || char === '}') {
+            if (depth === 0) {
+                if (current.trim()) parameters.push(current);
+                return parameters.filter(isRequired).length;
+            }
+            depth--;
+        } else if (char === ',' && depth === 0) {
+            parameters.push(current);
+            current = '';
+            continue;
+        }
+        current += char;
+    }
+    return undefined;
+}
+
+function isRequired(parameter: string): boolean {
+    const text = parameter.replace(/#\[[^\]]*\]/g, '').trim();
+    return text !== '' && !text.includes('=') && !text.includes('...');
+}
+
 const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const CLASS = /^\\?[A-Za-z_][A-Za-z0-9_]*(?:\\[A-Za-z_][A-Za-z0-9_]*)*$/;
 

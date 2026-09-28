@@ -67,10 +67,12 @@ both.
 
 ### Worker delivery
 
-Same approach as Docker Compose: write the worker through a one-shot WSL command.
+Same approach as Docker Compose: write the worker through a one-shot WSL command that
+runs `buildContainerUploadCommand` (`src/session/sshArgs.ts`), so it lands in the
+private per-user `/tmp/opentinker-<uid>/` directory:
 
 ```
-wsl.exe -d <distro> --exec sh -c "mkdir -p /tmp/opentinker && cat > /tmp/opentinker/worker.php"
+wsl.exe -d <distro> --exec sh -c "<buildContainerUploadCommand(hash)>"
 ```
 
 with the worker source on stdin. Hash the source and skip the write when unchanged

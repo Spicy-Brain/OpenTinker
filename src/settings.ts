@@ -15,6 +15,7 @@ export const settings = {
         return {
             sessionMode: c.get<'fresh' | 'keep'>('session.mode', 'fresh'),
             rollback: c.get<boolean>('database.rollback', false),
+            fake: c.get<boolean>('fakeSideEffects', false),
             timeoutMs: c.get<number>('timeoutMs', 30000),
             maxOutputBytes: c.get<number>('maxOutputBytes', 2097152),
             confirmPolicy: c.get<ConfirmPolicy>('production.confirm', 'writes'),
@@ -31,6 +32,12 @@ export const settings = {
     },
     inlineResults(): boolean {
         return config().get<boolean>('inlineResults', true);
+    },
+    codeLensRunMethods(): boolean {
+        return config().get<boolean>('codeLens.runMethods', true);
+    },
+    codeLensTinkerModel(): boolean {
+        return config().get<boolean>('codeLens.tinkerModel', true);
     },
     bootstrap(): string {
         return config().get<string>('bootstrap', 'auto') || 'auto';
@@ -55,5 +62,8 @@ export const settings = {
     },
     async setRollback(enabled: boolean): Promise<void> {
         await config().update('database.rollback', enabled, vscode.ConfigurationTarget.Workspace);
+    },
+    async setFakeSideEffects(enabled: boolean): Promise<void> {
+        await config().update('fakeSideEffects', enabled, vscode.ConfigurationTarget.Workspace);
     },
 };

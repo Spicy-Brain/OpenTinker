@@ -27,7 +27,8 @@ exports.run = async function run() {
         }
     };
 
-    const extension = vscode.extensions.getExtension('open-tinker.opentinker');
+    const manifest = require('../../package.json');
+    const extension = vscode.extensions.getExtension(`${manifest.publisher}.${manifest.name}`);
     assert.ok(extension, 'extension is installed');
     const app = await extension.activate();
     assert.ok(app, 'test API is exposed');
@@ -86,7 +87,10 @@ exports.run = async function run() {
             scratch.document.uri,
         );
         const titles = lenses.map((lens) => lens.command && lens.command.title);
-        assert.ok(titles.includes('$(play) Run'), titles.join(', '));
+        assert.ok(
+            titles.some((title) => title && title.startsWith('$(play) Run Scratch File')),
+            titles.join(', '),
+        );
         assert.ok(
             titles.some((title) => title && title.includes('Fresh session')),
             titles.join(', '),
@@ -149,6 +153,31 @@ exports.run = async function run() {
         const error = last().frames.find((frame) => frame.type === 'error');
         assert.equal(error.message, 'boom');
         assert.equal(error.scratchLine, 4);
+    });
+
+    await step('fake side effects capture mail instead of sending it', async () => {
+        await vscode.commands.executeCommand('opentinker.toggleFakes');
+        await sleep(300);
+        await setText(
+            scratch,
+            "<?php\nMail::raw('Hi', fn ($message) => $message->to('e2e@example.com')->subject('E2E'));\n",
+        );
+        await vscode.commands.executeCommand('opentinker.run');
+        const run = last();
+        assert.equal(
+            run.result.faked,
+            true,
+            JSON.stringify(run.frames.filter((f) => f.type === 'error')),
+        );
+        const effects = run.frames
+            .filter((frame) => frame.type === 'statement')
+            .flatMap((frame) => frame.sideEffects || []);
+        assert.deepEqual(
+            effects.map((effect) => effect.summary),
+            ['"E2E" to e2e@example.com'],
+        );
+        await vscode.commands.executeCommand('opentinker.toggleFakes');
+        await sleep(300);
     });
 
     await step('Run Selection applies the file’s imports', async () => {

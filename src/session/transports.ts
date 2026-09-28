@@ -4,6 +4,8 @@ import * as path from 'node:path';
 import type { SshEndpoint } from '../ssh/types';
 import type { Target } from '../targets/target';
 import {
+    buildContainerUploadCommand,
+    buildContainerWorkerCommand,
     buildRemoteWorkerCommand,
     buildSshArgs,
     buildUploadCommand,
@@ -16,8 +18,6 @@ import {
     type Transport,
     type TransportContext,
 } from './transport';
-
-const CONTAINER_WORKER_DIR = '/tmp/opentinker';
 
 export class LocalTransport implements Transport {
     readonly label: string;
@@ -44,10 +44,13 @@ export class LocalTransport implements Transport {
     }
 }
 
-/** docker compose exec and docker exec differ only in how the container is addressed. */
+/**
+ * docker compose exec and docker exec differ only in how the container is addressed.
+ * The worker lives in a per-user private directory under the container's /tmp.
+ */
 class ContainerTransport implements Transport {
     readonly label: string;
-    private readonly workerPath: string;
+    private readonly hash: string;
 
     constructor(
         private readonly context: TransportContext,
@@ -55,18 +58,13 @@ class ContainerTransport implements Transport {
         label: string,
     ) {
         this.label = label;
-        this.workerPath = `${CONTAINER_WORKER_DIR}/worker-${workerHash(context.workerSource)}.php`;
+        this.hash = workerHash(context.workerSource);
     }
 
     async ensureWorker(): Promise<void> {
         await runCommand(
             'docker',
-            [
-                ...this.execPrefix,
-                'sh',
-                '-c',
-                `mkdir -p ${CONTAINER_WORKER_DIR} && cat > ${this.workerPath}`,
-            ],
+            [...this.execPrefix, 'sh', '-c', buildContainerUploadCommand(this.hash)],
             this.context.workspaceFolder,
             this.context.workerSource,
         );
@@ -77,8 +75,14 @@ class ContainerTransport implements Transport {
             'docker',
             [
                 ...this.execPrefix,
-                this.context.phpBinary,
-                ...workerArgs(this.context, this.workerPath),
+                'sh',
+                '-c',
+                buildContainerWorkerCommand(
+                    this.hash,
+                    this.context.phpBinary,
+                    this.context.workingDir,
+                    this.context.bootstrap,
+                ),
             ],
             { cwd: this.context.workspaceFolder, stdio: ['pipe', 'pipe', 'pipe'] },
         );

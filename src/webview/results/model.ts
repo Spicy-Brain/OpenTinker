@@ -6,6 +6,7 @@ import type {
     QueryRecord,
     ResultFrame,
     RunFrame,
+    SideEffect,
     SqlSummary,
     ValueFrame,
 } from '../../shared/protocol';
@@ -26,9 +27,10 @@ export interface Card {
     ms?: number;
     exit?: string;
     import: boolean;
-    short?: string;
     queries: QueryRecord[];
     sql?: SqlSummary;
+    /** What the statement would have sent, captured by fakes. */
+    sideEffects: SideEffect[];
     change?: StatementChange;
 }
 
@@ -64,6 +66,7 @@ export function cardFor(
             status: 'running',
             import: false,
             queries: [],
+            sideEffects: [],
         };
         model.cards.set(key, card);
     }
@@ -81,12 +84,17 @@ export function applyFrame(model: RunModel, frame: RunFrame): Card | undefined {
             }
             return undefined;
         case 'output': {
+            // Echo output arrives in fragments (PsySH flushes each echo), so a
+            // fragment that is only "\n" still belongs to the text before it.
+            const existing = model.cards.get(Math.max(0, frame.stmt ?? 0));
+            const last = existing?.items.at(-1);
+            if (existing && last?.kind === 'output') {
+                last.text += frame.text;
+                return existing;
+            }
             if (!frame.text.trim()) return undefined;
             const card = cardFor(model, frame.stmt, frame.line);
-            const last = card.items.at(-1);
-            // Echo output arrives in fragments; keep it together.
-            if (last?.kind === 'output') last.text += frame.text;
-            else card.items.push({ kind: 'output', text: frame.text });
+            card.items.push({ kind: 'output', text: frame.text });
             return card;
         }
         case 'dump':
@@ -116,9 +124,9 @@ export function applyFrame(model: RunModel, frame: RunFrame): Card | undefined {
             card.ms = frame.ms;
             card.exit = frame.exit;
             card.import = frame.import === true;
-            card.short = frame.short;
             card.queries = frame.queries ?? [];
             card.sql = frame.sql;
+            card.sideEffects = frame.sideEffects ?? [];
             card.status = frame.ok ? (frame.exit ? 'ended' : 'ok') : 'failed';
             return card;
         }
@@ -127,7 +135,18 @@ export function applyFrame(model: RunModel, frame: RunFrame): Card | undefined {
 
 /** Import statements that ran cleanly are noise; hide them like Tinkerwell does. */
 export function isHidden(card: Card): boolean {
-    return card.import && card.status === 'ok' && card.items.length === 0;
+    return (
+        card.import &&
+        card.status === 'ok' &&
+        card.items.length === 0 &&
+        card.sideEffects.length === 0
+    );
+}
+
+export function sideEffectCount(model: RunModel): number {
+    let total = 0;
+    for (const card of model.cards.values()) total += card.sideEffects.length;
+    return total;
 }
 
 export function orderedCards(model: RunModel): Card[] {
@@ -173,6 +192,15 @@ export function summaryText(model: RunModel): string {
     if (result.memory) parts.push(`${(result.memory / 1048576).toFixed(1)} MB`);
     if (result.rolledBack === true) parts.push('database changes rolled back');
     if (result.rolledBack === false) parts.push('rollback failed');
+    if (result.faked === true) {
+        const faked = sideEffectCount(model);
+        parts.push(
+            faked
+                ? `${faked} side ${faked === 1 ? 'effect' : 'effects'} faked`
+                : 'side effects faked, none sent',
+        );
+    }
+    if (result.faked === false) parts.push('side effects were not faked');
     if (result.sessionReset) parts.push('kept session reset');
     return parts.join(' · ');
 }
@@ -200,6 +228,7 @@ export function emptyContext(): PanelContext {
         environment: 'unknown',
         sessionMode: 'fresh',
         rollback: false,
+        fake: false,
         state: 'idle',
         fork: true,
         hasTarget: false,
@@ -207,10 +236,17 @@ export function emptyContext(): PanelContext {
     };
 }
 
-/** Tables as CSV, guarding against spreadsheet formula injection. */
+const NUMBER = /^[-+]?(\d+\.?\d*|\.\d+)(e[-+]?\d+)?$/i;
+
+/**
+ * Tables as CSV, guarding against spreadsheet formula injection. Plain
+ * numbers such as -12.50 are left alone; only text that a spreadsheet would
+ * treat as a formula gets a leading quote.
+ */
 export function toCsv(columns: string[], rows: string[][]): string {
     const quote = (value: string): string => {
-        const safe = value && '=+-@\t\r'.includes(value.charAt(0)) ? `'${value}` : value;
+        const formula = '=+-@\t\r'.includes(value.charAt(0)) && !NUMBER.test(value);
+        const safe = value && formula ? `'${value}` : value;
         return `"${safe.replaceAll('"', '""')}"`;
     };
     return [columns, ...rows]
@@ -220,7 +256,7 @@ export function toCsv(columns: string[], rows: string[][]): string {
 
 export function toMarkdown(columns: string[], rows: string[][]): string {
     const escape = (value: string): string =>
-        (value ?? '').replaceAll('|', '\\|').replaceAll('\n', ' ');
+        (value ?? '').replaceAll('|', '\\|').replace(/\r\n?|\n/g, ' ');
     return [
         `| ${columns.map(escape).join(' | ')} |`,
         `| ${columns.map(() => '---').join(' | ')} |`,

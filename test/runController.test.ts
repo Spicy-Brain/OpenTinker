@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+    FakesUnavailableError,
     NoTargetError,
     RunController,
     type RunHost,
@@ -32,6 +33,7 @@ function setup(
         settings: () => ({
             sessionMode: 'fresh',
             rollback: false,
+            fake: false,
             timeoutMs: 0,
             maxOutputBytes: 1_000_000,
             confirmPolicy: 'writes',
@@ -141,9 +143,49 @@ describe('RunController', () => {
         controller.dispose();
     });
 
+    it('sends the fake flag and records that side effects were faked', async () => {
+        const { controller, fake } = setup({ settings: { fake: true } });
+        const finished = await controller.run(request('1;'));
+        expect(fake.workers[0]?.requests.find((item) => item.type === 'exec')?.fake).toBe(true);
+        expect(finished?.record.fake).toBe(true);
+        expect(finished?.record.faked).toBe(true);
+        controller.dispose();
+    });
+
+    it('refuses to run with fakes on when the app cannot fake', async () => {
+        const { controller, fake } = setup({ settings: { fake: true }, fakes: false });
+        await expect(
+            controller.run(request('Mail::raw("x", fn () => null);')),
+        ).rejects.toBeInstanceOf(FakesUnavailableError);
+        expect(fake.workers[0]?.requests.some((item) => item.type === 'exec')).toBe(false);
+        expect(controller.state).toBe('idle');
+        controller.dispose();
+    });
+
     it('needs a target', async () => {
         const { controller } = setup({ target: null });
         await expect(controller.run(request('1;'))).rejects.toBeInstanceOf(NoTargetError);
+        controller.dispose();
+    });
+
+    it('keeps a notice when a run has more results than history keeps', async () => {
+        const { controller, fake } = setup({ hang: (code) => code === 'many;' });
+        const running = controller.run(request('many;'));
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        const worker = fake.workers[0];
+        const id = controller.current?.record.id;
+        let live = 0;
+        controller.onDidReceiveFrame.event(() => live++);
+        for (let index = 0; index < 2100; index++)
+            worker?.send({ type: 'output', id, stmt: 1, line: 1, text: `${index}\n` });
+        worker?.send({ type: 'result', id, ok: true, statements: 1, ms: 1, memory: 0 });
+        const finished = await running;
+        expect(live).toBe(2100);
+        const notices = finished?.frames.filter(
+            (frame) => frame.type === 'output' && frame.text.includes('Only the first 2000'),
+        );
+        expect(notices).toHaveLength(1);
+        expect(finished?.frames.at(-1)?.type).toBe('result');
         controller.dispose();
     });
 

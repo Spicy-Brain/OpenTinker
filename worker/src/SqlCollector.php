@@ -13,6 +13,12 @@ final class SqlCollector
 {
     private const MAX_LISTED = 100;
 
+    /** Bulk inserts and binary bindings can be huge; frames only need enough to recognise them. */
+    private const MAX_SQL = 10_000;
+    private const MAX_BINDINGS = 100;
+    private const MAX_BINDING = 1_000;
+    private const MAX_SHAPES = 1_000;
+
     /** @var array<int, array{sql: string, bindings: array<int, string>, time: float|null}> */
     private array $queries = [];
 
@@ -36,10 +42,13 @@ final class SqlCollector
 
         try {
             \Illuminate\Support\Facades\DB::listen(function ($query): void {
-                $sql = (string) $query->sql;
+                $sql = \substr((string) $query->sql, 0, self::MAX_SQL);
                 $this->total++;
                 $this->time += isset($query->time) ? (float) $query->time : 0.0;
-                $this->shapes[$sql] = ($this->shapes[$sql] ?? 0) + 1;
+
+                if (isset($this->shapes[$sql]) || \count($this->shapes) < self::MAX_SHAPES) {
+                    $this->shapes[$sql] = ($this->shapes[$sql] ?? 0) + 1;
+                }
 
                 if (\count($this->queries) >= self::MAX_LISTED) {
                     return;
@@ -47,9 +56,9 @@ final class SqlCollector
 
                 $bindings = [];
 
-                foreach ((array) $query->bindings as $binding) {
+                foreach (\array_slice((array) $query->bindings, 0, self::MAX_BINDINGS) as $binding) {
                     if (\is_scalar($binding) || $binding === null) {
-                        $bindings[] = (string) ($binding ?? 'null');
+                        $bindings[] = \substr((string) ($binding ?? 'null'), 0, self::MAX_BINDING);
                     } elseif ($binding instanceof \DateTimeInterface) {
                         $bindings[] = $binding->format('Y-m-d H:i:s');
                     } else {

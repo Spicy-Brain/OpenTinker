@@ -5,6 +5,8 @@ import type { Transport } from '../../src/session/transport';
 
 export interface FakeOptions {
     fork?: boolean;
+    /** Whether the app can fake side effects (Laravel). */
+    fakes?: boolean;
     env?: string;
     protocol?: number;
     /** Runs that should hang until cancelled. */
@@ -17,6 +19,7 @@ export class FakeWorker extends EventEmitter {
     readonly stdout = new PassThrough();
     readonly stderr = new PassThrough();
     exitCode: number | null = null;
+    signalCode: NodeJS.Signals | null = null;
     readonly requests: Array<Record<string, unknown>> = [];
     private buffer = '';
 
@@ -42,7 +45,12 @@ export class FakeWorker extends EventEmitter {
                 env: options.env ?? 'local',
                 basePath: '/app',
                 pid: 1,
-                capabilities: { fork: options.fork ?? true, parser: true, database: true },
+                capabilities: {
+                    fork: options.fork ?? true,
+                    parser: true,
+                    database: true,
+                    fakes: options.fakes ?? true,
+                },
             }),
         );
     }
@@ -137,6 +145,7 @@ export class FakeWorker extends EventEmitter {
                     ms: 2,
                     memory: 1024,
                     rolledBack: request.rollback ? true : null,
+                    faked: request.fake ? true : null,
                 });
                 break;
             }

@@ -62,6 +62,38 @@ export function buildUploadCommand(hash: string): string {
     );
 }
 
+/**
+ * Uploads the worker (read from stdin) inside a container. /tmp is shared by
+ * every user of the container, so the directory is per user and must be a real
+ * directory owned by that user; the file is written privately and moved into
+ * place. The ownership test fails closed on a shell without `test -O`.
+ */
+export function buildContainerUploadCommand(hash: string, root = '/tmp'): string {
+    return (
+        `umask 077; d=${containerWorkerDir(root)}; mkdir -p "$d" 2>/dev/null; ` +
+        'if [ -d "$d" ] && [ ! -L "$d" ] && [ -O "$d" ]; then :; else ' +
+        'echo "OpenTinker: refusing to use $d: it is not a directory owned by this user" >&2; exit 1; fi; ' +
+        'chmod 700 "$d" && tmp=$(mktemp "$d/.worker.XXXXXXXX") && ' +
+        'trap \'rm -f "$tmp"\' EXIT && cat > "$tmp" && ' +
+        `mv -f "$tmp" "$d/worker-${hash}.php"`
+    );
+}
+
+/** Runs the worker uploaded by buildContainerUploadCommand. */
+export function buildContainerWorkerCommand(
+    hash: string,
+    phpBinary: string,
+    workingDir: string,
+    bootstrap = 'auto',
+    root = '/tmp',
+): string {
+    return `exec ${shellQuote(phpBinary)} ${containerWorkerDir(root)}"/worker-${hash}.php" ${shellQuote(`--base-path=${workingDir}`)} ${shellQuote(`--bootstrap=${bootstrap}`)}`;
+}
+
+function containerWorkerDir(root: string): string {
+    return `${shellQuote(root)}"/opentinker-$(id -u)"`;
+}
+
 export function buildRemoteWorkerCommand(
     hash: string,
     phpBinary: string,

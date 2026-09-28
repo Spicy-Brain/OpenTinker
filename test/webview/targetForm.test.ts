@@ -89,6 +89,30 @@ describe('target form', () => {
         });
     });
 
+    it('saving an edited target does not make it the active one', async () => {
+        const posted = await load({
+            ...base,
+            isNew: false,
+            target: {
+                id: 't4',
+                kind: 'ssh',
+                name: 'Prod',
+                environment: 'production',
+                workingDir: '/var/www',
+                host: 'prod.example.com',
+                user: 'forge',
+                port: 22,
+            },
+        });
+        const form = document.getElementById('form') as HTMLFormElement;
+        form.dispatchEvent(new Event('submit', { cancelable: true }));
+        expect(posted.at(-1)).toMatchObject({
+            kind: 'save',
+            use: false,
+            target: { id: 't4', host: 'prod.example.com' },
+        });
+    });
+
     it('shows test results', async () => {
         await load({
             ...base,

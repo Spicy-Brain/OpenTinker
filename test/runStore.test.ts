@@ -52,6 +52,28 @@ describe('RunStore', () => {
         expect(new RunStore(state, 50, true).get('second')?.frames).toEqual(frames);
     });
 
+    it('deletes kept results once persistence is turned off', async () => {
+        const state = memoryState();
+        const frames = [{ type: 'output' as const, text: 'secret' }];
+        const persistent = new RunStore(state, 50, true);
+        await persistent.add(record('first', '1'), frames);
+        await persistent.configure(50, false);
+        expect(state.get('opentinker.historyResults.v2')).toBeUndefined();
+
+        await new RunStore(state, 50, true).add(record('second', '2'), frames);
+        new RunStore(state, 50, false);
+        expect(state.get('opentinker.historyResults.v2')).toBeUndefined();
+    });
+
+    it('applies a lower history limit straight away', async () => {
+        const state = memoryState();
+        const store = new RunStore(state, 50);
+        for (const id of ['a', 'b', 'c']) await store.add(record(id, id), []);
+        await store.configure(2, false);
+        expect(store.recentRuns().map((entry) => entry.id)).toEqual(['c', 'b']);
+        expect(new RunStore(state).recentRuns()).toHaveLength(2);
+    });
+
     it('preserves existing recent entries as metadata-only history', async () => {
         const state = memoryState();
         await state.update('opentinker.recentRuns', [

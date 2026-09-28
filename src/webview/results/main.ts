@@ -6,7 +6,15 @@ import type {
     StatementChange,
 } from '../../shared/panelMessages';
 import type { ScopeFrame } from '../../shared/protocol';
-import { copyMenu, dumpView, errorView, sqlView, valueView, type Ctx } from './components';
+import {
+    copyMenu,
+    dumpView,
+    errorView,
+    sideEffectsView,
+    sqlView,
+    valueView,
+    type Ctx,
+} from './components';
 import { button, h } from './dom';
 import {
     applyFrame,
@@ -38,10 +46,28 @@ interface CardView {
     change: HTMLElement;
     meta: HTMLElement;
     body: HTMLElement;
+    effects: HTMLElement;
     sql: HTMLElement;
     rendered: number;
     outputs: Map<number, HTMLElement>;
+    /** What the SQL and side-effect sections were built from, so they only rebuild on change. */
+    built: { queries?: unknown; sideEffects?: unknown };
 }
+
+/** The parts of a card that search looks at: its content, not its buttons and menus. */
+const SEARCHABLE = [
+    '.excerpt',
+    'pre.output',
+    // The shown view of a value (dump, model, table), without its copy menu.
+    '.value-body',
+    '.inline-result',
+    '.error-class',
+    '.error-message',
+    '.trace',
+    '.sql-text',
+    '.n-plus-one',
+    '.side-effect-summary',
+].join(', ');
 
 export class ResultsApp {
     private model: RunModel = emptyRun();
@@ -49,7 +75,11 @@ export class ResultsApp {
     private scope: ScopeFrame | null = null;
     private scopeNote = '';
     private readonly views = new Map<number, CardView>();
-    private tab: 'results' | 'variables' = 'results';
+    /** Highest statement with a card, so cards arriving in order are simply appended. */
+    private lastStmt = -1;
+    /** The welcome or "no output" message shown instead of cards. */
+    private placeholder?: HTMLElement;
+    private announced = '';
     private readonly ctx: Ctx;
 
     private readonly el = {
@@ -58,13 +88,29 @@ export class ResultsApp {
         target: h('button', { class: 'pill target', attrs: { type: 'button' } }),
         mode: h('button', { class: 'pill mode', attrs: { type: 'button' } }),
         rollback: h('button', { class: 'pill rollback', attrs: { type: 'button' } }),
-        status: h('span', { class: 'status', attrs: { role: 'status', 'aria-live': 'polite' } }),
+        fakes: h('button', { class: 'pill fakes', attrs: { type: 'button' } }),
+        status: h('span', { class: 'status' }),
+        /** Screen readers hear state changes and the final summary, not every frame. */
+        announcer: h('div', {
+            class: 'sr-only',
+            attrs: { role: 'status', 'aria-live': 'polite' },
+        }),
         toolbar: h('div', { class: 'toolbar' }),
         summary: h('div', { class: 'summary' }),
         code: h('details', { class: 'code-view' }),
         cards: h('div', { class: 'cards' }),
-        results: h('section', { class: 'results', attrs: { role: 'tabpanel' } }),
-        variables: h('section', { class: 'variables', attrs: { role: 'tabpanel' } }),
+        results: h('section', {
+            class: 'results',
+            attrs: { role: 'tabpanel', id: 'results-panel', 'aria-labelledby': 'results-tab' },
+        }),
+        variables: h('section', {
+            class: 'variables',
+            attrs: {
+                role: 'tabpanel',
+                id: 'variables-panel',
+                'aria-labelledby': 'variables-tab',
+            },
+        }),
         search: h('input', {
             class: 'search',
             attrs: {
@@ -76,16 +122,36 @@ export class ResultsApp {
         resultsTab: h('button', {
             class: 'tab',
             text: 'Results',
-            attrs: { type: 'button', role: 'tab' },
+            attrs: {
+                type: 'button',
+                role: 'tab',
+                id: 'results-tab',
+                'aria-controls': 'results-panel',
+            },
         }),
         variablesTab: h('button', {
             class: 'tab',
             text: 'Variables',
-            attrs: { type: 'button', role: 'tab' },
+            attrs: {
+                type: 'button',
+                role: 'tab',
+                id: 'variables-tab',
+                'aria-controls': 'variables-panel',
+            },
         }),
+        varHead: h('div', { class: 'var-head' }),
+        varFilter: h('input', {
+            class: 'search',
+            attrs: {
+                type: 'search',
+                placeholder: 'Filter variables…',
+                'aria-label': 'Filter variables',
+            },
+        }),
+        varList: h('div', { class: 'var-list' }),
     };
 
-    private readonly buttons: Record<'rerun' | 'stop' | 'restart' | 'clear', HTMLButtonElement>;
+    private readonly buttons: Record<'run' | 'restart' | 'clear', HTMLButtonElement>;
 
     constructor(
         private readonly root: HTMLElement,
@@ -93,13 +159,9 @@ export class ResultsApp {
     ) {
         this.ctx = { post: (message) => this.api.postMessage(message), run: () => this.model.run };
         this.buttons = {
-            rerun: button('▶ Run', () => this.action('run'), {
+            // One button that switches between Run and Stop, so focus stays put.
+            run: button('▶ Run', () => this.action(this.busy ? 'stop' : 'run'), {
                 class: 'tool primary run',
-                title: 'Run the scratch file',
-            }),
-            stop: button('Stop', () => this.action('stop'), {
-                class: 'tool danger',
-                title: 'Stop the current run',
             }),
             restart: button('Reset session', () => this.action('restartSession'), {
                 class: 'tool',
@@ -125,14 +187,13 @@ export class ResultsApp {
             case 'frame': {
                 const card = applyFrame(this.model, message.frame);
                 if (card) this.renderCard(card);
-                if (message.frame.type === 'result') this.renderRun();
-                else this.renderStatus();
+                this.renderStatus();
                 break;
             }
             case 'finish':
                 applyFrame(this.model, message.result);
                 this.applyChanges(message.changes);
-                this.renderRun();
+                this.finishRun();
                 break;
             case 'render':
                 this.model = beginRun(message.run);
@@ -147,16 +208,24 @@ export class ResultsApp {
                 this.scopeNote = message.note ?? '';
                 this.renderVariables();
                 break;
-            case 'context':
+            case 'context': {
+                const modeChanged = message.context.sessionMode !== this.context.sessionMode;
                 this.context = message.context;
                 this.renderContext();
                 this.renderStatus();
+                if (!this.model.run) this.renderWelcome();
+                if (modeChanged) this.renderVariables();
                 break;
+            }
             case 'clear':
                 this.model = emptyRun();
                 this.renderRun();
                 break;
         }
+    }
+
+    private get busy(): boolean {
+        return this.context.state !== 'idle' || this.model.running;
     }
 
     private action(action: PanelAction): void {
@@ -175,16 +244,34 @@ export class ResultsApp {
         el.target.addEventListener('click', () => this.action('chooseTarget'));
         el.mode.addEventListener('click', () => this.action('toggleMode'));
         el.rollback.addEventListener('click', () => this.action('toggleRollback'));
+        el.fakes.addEventListener('click', () => this.action('toggleFakes'));
         el.search.addEventListener('input', () => this.applySearch());
         el.resultsTab.addEventListener('click', () => this.showTab('results'));
         el.variablesTab.addEventListener('click', () => this.showTab('variables'));
+        el.varFilter.addEventListener('input', () => this.renderVariableList());
 
-        el.toolbar.append(
-            this.buttons.rerun,
-            this.buttons.stop,
-            this.buttons.restart,
-            this.buttons.clear,
+        el.toolbar.append(this.buttons.run, this.buttons.restart, this.buttons.clear);
+
+        const tablist = h(
+            'div',
+            { class: 'tabs', attrs: { role: 'tablist' } },
+            el.resultsTab,
+            el.variablesTab,
         );
+        tablist.addEventListener('keydown', (event) => {
+            if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+            event.preventDefault();
+            const next =
+                event.key === 'Home'
+                    ? 'results'
+                    : event.key === 'End'
+                      ? 'variables'
+                      : el.results.hidden
+                        ? 'results'
+                        : 'variables';
+            this.showTab(next);
+            (next === 'results' ? el.resultsTab : el.variablesTab).focus();
+        });
 
         const header = h(
             'header',
@@ -197,17 +284,13 @@ export class ResultsApp {
                 el.target,
                 el.mode,
                 el.rollback,
+                el.fakes,
                 el.status,
             ),
             h(
                 'div',
                 { class: 'tabs-row' },
-                h(
-                    'div',
-                    { class: 'tabs', attrs: { role: 'tablist' } },
-                    el.resultsTab,
-                    el.variablesTab,
-                ),
+                tablist,
                 h(
                     'div',
                     { class: 'tools' },
@@ -219,18 +302,20 @@ export class ResultsApp {
         );
 
         el.results.append(el.summary, el.code, el.cards);
-        this.root.replaceChildren(header, el.results, el.variables);
+        el.variables.append(el.varHead, el.varFilter, el.varList);
+        this.root.replaceChildren(header, el.results, el.variables, el.announcer);
         this.showTab('results');
     }
 
     private showTab(tab: 'results' | 'variables'): void {
-        this.tab = tab;
         const variables = tab === 'variables';
         this.el.results.hidden = variables;
         this.el.variables.hidden = !variables;
         this.el.search.parentElement?.toggleAttribute('hidden', variables);
         this.el.resultsTab.setAttribute('aria-selected', String(!variables));
         this.el.variablesTab.setAttribute('aria-selected', String(variables));
+        this.el.resultsTab.tabIndex = variables ? -1 : 0;
+        this.el.variablesTab.tabIndex = variables ? 0 : -1;
         if (variables && this.context.sessionMode === 'keep') this.action('refreshScope');
     }
 
@@ -259,21 +344,29 @@ export class ResultsApp {
             ? 'Database changes are rolled back after each run. Mail, queues and files are not.'
             : 'Click to roll back database changes after each run.';
 
+        el.fakes.textContent = context.fake ? 'Fakes on' : 'Fakes off';
+        el.fakes.className = `pill fakes ${context.fake ? 'on' : 'off'}`;
+        el.fakes.title = context.fake
+            ? 'Mail, notifications, jobs and HTTP calls are faked, and each card shows what would have been sent.'
+            : 'Click to fake mail, notifications, jobs and HTTP calls during runs.';
+
         this.buttons.restart.hidden = context.sessionMode !== 'keep';
         this.renderButtons();
     }
 
     private renderButtons(): void {
-        const busy = this.context.state !== 'idle' || this.model.running;
-        this.buttons.stop.hidden = !busy;
-        this.buttons.rerun.hidden = busy;
+        const busy = this.busy;
+        const runButton = this.buttons.run;
         const run = this.model.run;
         const scratch = this.context.scratchName;
-        this.buttons.rerun.disabled = !run?.code && !scratch;
-        this.buttons.rerun.title =
-            run && !run.scratch
-                ? `Run ${run.label} again`
-                : `Run ${scratch || run?.label || 'the scratch file'} (Ctrl/Cmd+Enter)`;
+        runButton.textContent = busy ? 'Stop' : '▶ Run';
+        runButton.className = busy ? 'tool danger' : 'tool primary run';
+        runButton.disabled = busy ? this.context.state === 'stopping' : !run?.code && !scratch;
+        runButton.title = busy
+            ? 'Stop the current run (Ctrl/Cmd+Alt+C)'
+            : run && !run.scratch
+              ? `Run ${run.label} again`
+              : `Run ${scratch || run?.label || 'the scratch file'} (Ctrl/Cmd+Enter)`;
         this.buttons.clear.disabled = busy;
         this.buttons.restart.disabled = busy;
     }
@@ -281,15 +374,31 @@ export class ResultsApp {
     private renderStatus(): void {
         const { state } = this.context;
         let text = '';
-        if (state === 'starting') text = 'Starting…';
-        else if (state === 'stopping') text = 'Stopping…';
+        let announcement = '';
+        if (state === 'starting') text = announcement = 'Starting…';
+        else if (state === 'stopping') text = announcement = 'Stopping…';
         else if (state === 'running' || this.model.running) {
-            const cards = orderedCards(this.model).filter((card) => !isHidden(card));
-            const last = cards.at(-1);
+            announcement = 'Running…';
+            const last = this.lastVisibleCard();
             text = last ? `Running line ${sourceLine(this.model.run, last.line)}…` : 'Running…';
         } else if (this.model.stored) text = 'From history';
         this.el.status.textContent = text;
+        if (announcement) this.announce(announcement);
         this.renderButtons();
+    }
+
+    private announce(text: string): void {
+        if (text === this.announced) return;
+        this.announced = text;
+        this.el.announcer.textContent = text;
+    }
+
+    private lastVisibleCard(): Card | undefined {
+        let last: Card | undefined;
+        for (const card of this.model.cards.values()) {
+            if (!isHidden(card) && (!last || card.stmt > last.stmt)) last = card;
+        }
+        return last;
     }
 
     private renderRun(): void {
@@ -297,10 +406,7 @@ export class ResultsApp {
         const run = model.run;
         el.title.textContent = run?.label || 'OpenTinker';
         el.title.title = run?.target ?? '';
-
-        el.summary.textContent = summaryText(model);
-        el.summary.className = `summary ${model.result ? (model.result.ok ? 'ok' : 'failed') : ''}`;
-        el.summary.hidden = !model.result;
+        this.renderSummary();
 
         el.code.hidden = !run;
         el.code.open = false;
@@ -318,80 +424,109 @@ export class ResultsApp {
                 h('pre', { class: 'code', text: run.code }),
                 h('div', {
                     class: 'code-meta muted',
-                    text: `${run.target} · ${run.sessionMode === 'fresh' ? 'fresh session' : 'kept session'}${run.rollback ? ' · rollback' : ''} · ${new Date(run.at).toLocaleString()}`,
+                    text: `${run.target} · ${run.sessionMode === 'fresh' ? 'fresh session' : 'kept session'}${run.rollback ? ' · rollback' : ''}${run.fake ? ' · fakes' : ''} · ${new Date(run.at).toLocaleString()}`,
                 }),
                 copyMenu(this.ctx, [{ label: 'Code', value: () => run.code }]),
             );
         }
 
         this.views.clear();
+        this.lastStmt = -1;
+        this.placeholder = undefined;
         el.cards.replaceChildren();
-        const cards = orderedCards(model);
-        for (const card of cards) this.renderCard(card);
-
-        if (!run) this.renderWelcome();
-        else if (!cards.some((card) => !isHidden(card))) {
-            el.cards.append(
-                h('div', {
-                    class: 'empty',
-                    text: model.running
-                        ? 'Running…'
-                        : model.stored && !model.result
-                          ? 'Output was not kept for this run. Enable opentinker.history.persistResults to keep it.'
-                          : 'Finished with no output. End a line with an expression, or use dump(), to see values.',
-                }),
-            );
-        }
-
+        for (const card of orderedCards(model)) this.renderCard(card);
+        this.renderPlaceholder();
         this.renderStatus();
-        this.applySearch();
+    }
+
+    /** Updates cards in place when a run ends, so open cards, chosen views and focus survive. */
+    private finishRun(): void {
+        for (const card of this.model.cards.values()) this.renderCard(card);
+        this.renderSummary();
+        this.renderPlaceholder();
+        this.renderStatus();
+        this.announce(summaryText(this.model));
+    }
+
+    private renderSummary(): void {
+        const { el, model } = this;
+        el.summary.textContent = summaryText(model);
+        el.summary.className = `summary ${model.result ? (model.result.ok ? 'ok' : 'failed') : ''}`;
+        el.summary.hidden = !model.result;
+    }
+
+    /** The welcome before any run, or a note when a run has nothing to show. */
+    private renderPlaceholder(): void {
+        const { model } = this;
+        if (!model.run) {
+            this.renderWelcome();
+            return;
+        }
+        if (orderedCards(model).some((card) => !isHidden(card))) {
+            this.removePlaceholder();
+            return;
+        }
+        this.removePlaceholder();
+        this.placeholder = h('div', {
+            class: 'empty',
+            text: model.running
+                ? 'Running…'
+                : model.stored && !model.result
+                  ? 'Output was not kept for this run. Enable opentinker.history.persistResults to keep it.'
+                  : 'Finished with no output. End a line with an expression, or use dump(), to see values.',
+        });
+        this.el.cards.append(this.placeholder);
+    }
+
+    private removePlaceholder(): void {
+        this.placeholder?.remove();
+        this.placeholder = undefined;
     }
 
     private renderWelcome(): void {
-        this.el.cards.replaceChildren(
+        this.placeholder = h(
+            'div',
+            { class: 'welcome' },
+            h('h2', { text: 'Tinker with your app' }),
+            h('p', {
+                text: 'Write PHP in a scratch file and run it against your app. Each line gets its own result card.',
+            }),
             h(
-                'div',
-                { class: 'welcome' },
-                h('h2', { text: 'Tinker with your app' }),
-                h('p', {
-                    text: 'Write PHP in a scratch file and run it against your app. Each line gets its own result card.',
-                }),
+                'ul',
+                {},
+                h('li', {}, h('kbd', { text: 'Ctrl/Cmd+Enter' }), ' runs a scratch file'),
                 h(
-                    'ul',
+                    'li',
                     {},
-                    h('li', {}, h('kbd', { text: 'Ctrl/Cmd+Enter' }), ' runs a scratch file'),
-                    h(
-                        'li',
-                        {},
-                        h('kbd', { text: 'Ctrl/Cmd+Shift+Enter' }),
-                        ' runs the selection or current line in any PHP file',
-                    ),
-                    h(
-                        'li',
-                        {},
-                        h('code', { text: '//?' }),
-                        ' at the end of a line shows its value inline',
-                    ),
+                    h('kbd', { text: 'Ctrl/Cmd+Shift+Enter' }),
+                    ' runs the selection or current line in any PHP file',
                 ),
                 h(
-                    'div',
-                    { class: 'welcome-actions' },
-                    this.context.scratchName
-                        ? button(`▶ Run ${this.context.scratchName}`, () => this.action('run'), {
-                              class: 'tool primary run big',
-                          })
-                        : null,
-                    button('New scratch file', () => this.action('newScratch'), {
-                        class: this.context.scratchName ? 'tool' : 'tool primary',
-                    }),
-                    button(
-                        this.context.hasTarget ? 'Change target' : 'Choose target',
-                        () => this.action('chooseTarget'),
-                        { class: 'tool' },
-                    ),
+                    'li',
+                    {},
+                    h('code', { text: '//?' }),
+                    ' at the end of a line shows its value inline',
+                ),
+            ),
+            h(
+                'div',
+                { class: 'welcome-actions' },
+                this.context.scratchName
+                    ? button(`▶ Run ${this.context.scratchName}`, () => this.action('run'), {
+                          class: 'tool primary run big',
+                      })
+                    : null,
+                button('New scratch file', () => this.action('newScratch'), {
+                    class: this.context.scratchName ? 'tool' : 'tool primary',
+                }),
+                button(
+                    this.context.hasTarget ? 'Change target' : 'Choose target',
+                    () => this.action('chooseTarget'),
+                    { class: 'tool' },
                 ),
             ),
         );
+        this.el.cards.replaceChildren(this.placeholder);
     }
 
     private renderCard(card: Card): void {
@@ -401,14 +536,12 @@ export class ResultsApp {
         if (!view) {
             view = this.createCardView(card);
             this.views.set(card.stmt, view);
-            this.el.cards.querySelector('.empty, .welcome')?.remove();
-            const after = [...this.views.entries()]
-                .filter(([stmt]) => stmt > card.stmt)
-                .sort((a, b) => a[0] - b[0])[0];
-            this.el.cards.insertBefore(view.root, after ? after[1].root : null);
+            this.removePlaceholder();
+            const next = card.stmt > this.lastStmt ? undefined : this.viewAfter(card.stmt);
+            this.el.cards.insertBefore(view.root, next?.root ?? null);
+            this.lastStmt = Math.max(this.lastStmt, card.stmt);
         }
 
-        view.root.hidden = isHidden(card);
         view.root.className = `card ${card.status}`;
         const run = this.model.run;
         const line = sourceLine(run, card.line);
@@ -457,12 +590,36 @@ export class ResultsApp {
         });
         view.rendered = card.items.length;
 
-        const sql = sqlView(this.ctx, card.queries, card.sql);
-        view.sql.replaceChildren(...(sql ? [sql] : []));
+        // Rebuilt only when a statement frame brings new data, so open sections stay open.
+        if (view.built.queries !== card.queries) {
+            view.built.queries = card.queries;
+            const sql = sqlView(this.ctx, card.queries, card.sql);
+            view.sql.replaceChildren(...(sql ? [sql] : []));
+        }
+        if (view.built.sideEffects !== card.sideEffects) {
+            view.built.sideEffects = card.sideEffects;
+            const effects = sideEffectsView(card.sideEffects);
+            view.effects.replaceChildren(...(effects ? [effects] : []));
+        }
         if (card.sql?.repeated.length)
             view.meta.prepend(h('span', { class: 'badge warn', text: 'N+1?' }));
         else if ((card.sql?.total ?? 0) > 0)
             view.meta.prepend(h('span', { class: 'muted', text: `${card.sql?.total} SQL` }));
+        if (card.sideEffects.length)
+            view.meta.prepend(
+                h('span', { class: 'badge faked', text: `${card.sideEffects.length} faked` }),
+            );
+
+        this.updateVisibility(view, card);
+    }
+
+    /** The first card view after this statement, to insert a late card before it. */
+    private viewAfter(stmt: number): CardView | undefined {
+        let next: [number, CardView] | undefined;
+        for (const entry of this.views) {
+            if (entry[0] > stmt && (!next || entry[0] < next[0])) next = entry;
+        }
+        return next?.[1];
     }
 
     private createCardView(card: Card): CardView {
@@ -484,8 +641,14 @@ export class ResultsApp {
         const change = h('span', { class: 'badge change' });
         const meta = h('span', { class: 'meta' });
         const body = h('div', { class: 'card-body' });
+        const effects = h('div', { class: 'card-effects' });
         const sql = h('div', { class: 'card-sql' });
-        root.append(h('summary', { class: 'card-head' }, line, excerptEl, change, meta), body, sql);
+        root.append(
+            h('summary', { class: 'card-head' }, line, excerptEl, change, meta),
+            body,
+            effects,
+            sql,
+        );
         return {
             root,
             line,
@@ -493,101 +656,85 @@ export class ResultsApp {
             change,
             meta,
             body,
+            effects,
             sql,
             rendered: 0,
             outputs: new Map(),
+            built: {},
         };
     }
 
     private renderVariables(): void {
-        const { variables } = this.el;
-        const vars = this.scope?.vars ?? [];
-        const filter = h('input', {
-            class: 'search',
-            attrs: {
-                type: 'search',
-                placeholder: 'Filter variables…',
-                'aria-label': 'Filter variables',
-            },
-        });
-        const list = h('div', { class: 'var-list' });
-
-        const render = (): void => {
-            const term = filter.value.trim().toLowerCase().replace(/^\$/, '');
-            list.replaceChildren();
-            for (const variable of vars.filter((item) => item.name.toLowerCase().includes(term))) {
-                const item = h(
-                    'details',
-                    { class: 'var' },
-                    h(
-                        'summary',
-                        {},
-                        h('code', { class: 'var-name', text: `$${variable.name}` }),
-                        variable.type
-                            ? h('span', { class: 'var-type', text: variable.type })
-                            : null,
-                        variable.short
-                            ? h('span', { class: 'var-short', text: variable.short })
-                            : null,
-                    ),
-                );
-                item.addEventListener('toggle', () => {
-                    if (item.open && !item.querySelector('.dump'))
-                        item.append(dumpView(variable.html));
-                });
-                list.append(item);
-            }
-            if (!vars.length)
-                list.append(
-                    h('div', {
-                        class: 'empty',
-                        text:
-                            this.scopeNote ||
-                            'Run some code to see the variables it leaves behind.',
-                    }),
-                );
-        };
-        filter.addEventListener('input', render);
-
-        const heading =
-            this.context.sessionMode === 'keep'
-                ? 'Variables in the kept session'
-                : 'Variables the last run left behind';
-        variables.replaceChildren(
-            h(
-                'div',
-                { class: 'var-head' },
-                h('span', { text: heading }),
-                this.scope?.truncated
-                    ? h('span', { class: 'badge warn', text: 'truncated' })
-                    : null,
-                this.context.sessionMode === 'keep'
-                    ? button('Refresh', () => this.action('refreshScope'), { class: 'link-button' })
-                    : null,
-            ),
-            filter,
-            list,
+        const keep = this.context.sessionMode === 'keep';
+        this.el.varHead.replaceChildren(
+            h('span', {
+                text: keep ? 'Variables in the kept session' : 'Variables the last run left behind',
+            }),
+            this.scope?.truncated ? h('span', { class: 'badge warn', text: 'truncated' }) : null,
+            keep
+                ? button('Refresh', () => this.action('refreshScope'), { class: 'link-button' })
+                : null,
         );
-        render();
+        this.renderVariableList();
+    }
+
+    private renderVariableList(): void {
+        const vars = this.scope?.vars ?? [];
+        const term = this.el.varFilter.value.trim().toLowerCase().replace(/^\$/, '');
+        const list = this.el.varList;
+        list.replaceChildren();
+        for (const variable of vars.filter((item) => item.name.toLowerCase().includes(term))) {
+            const item = h(
+                'details',
+                { class: 'var' },
+                h(
+                    'summary',
+                    {},
+                    h('code', { class: 'var-name', text: `$${variable.name}` }),
+                    variable.type ? h('span', { class: 'var-type', text: variable.type }) : null,
+                    variable.short ? h('span', { class: 'var-short', text: variable.short }) : null,
+                ),
+            );
+            item.addEventListener('toggle', () => {
+                if (item.open && !item.querySelector('.dump')) item.append(dumpView(variable.html));
+            });
+            list.append(item);
+        }
+        if (!vars.length)
+            list.append(
+                h('div', {
+                    class: 'empty',
+                    text: this.scopeNote || 'Run some code to see the variables it leaves behind.',
+                }),
+            );
+    }
+
+    private searchTerm(): string {
+        return this.el.search.value.trim().toLowerCase();
+    }
+
+    private updateVisibility(view: CardView, card: Card, term = this.searchTerm()): void {
+        view.root.hidden = isHidden(card) || (!!term && !matches(view.root, term));
     }
 
     private applySearch(): void {
-        const term = this.el.search.value.trim().toLowerCase();
+        const term = this.searchTerm();
         for (const [stmt, view] of this.views) {
             const card = this.model.cards.get(stmt);
-            const hidden = card ? isHidden(card) : false;
-            view.root.hidden =
-                hidden || (!!term && !view.root.textContent?.toLowerCase().includes(term));
+            if (card) this.updateVisibility(view, card, term);
         }
     }
 
     private setAllOpen(open: boolean): void {
         for (const view of this.views.values()) view.root.open = open;
     }
+}
 
-    get currentTab(): string {
-        return this.tab;
+function matches(root: HTMLElement, term: string): boolean {
+    for (const element of root.querySelectorAll(SEARCHABLE)) {
+        if (element.textContent?.toLowerCase().includes(term)) return true;
     }
+    return false;
 }
 
 export function start(): ResultsApp {

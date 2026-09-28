@@ -9,6 +9,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 export const WORKER_SOURCES = [
     'src/Protocol.php',
+    'src/TempDir.php',
     'src/SourceCode.php',
     'src/FileImports.php',
     'src/ImportAliases.php',
@@ -19,6 +20,7 @@ export const WORKER_SOURCES = [
     'src/SqlCollector.php',
     'src/ErrorFormatter.php',
     'src/ScopeReader.php',
+    'src/SideEffects.php',
     'src/Runner.php',
     'src/Forker.php',
     'src/ModelHints.php',

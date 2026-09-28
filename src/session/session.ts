@@ -39,6 +39,8 @@ interface PendingRequest {
 
 const START_TIMEOUT_MS = 30000;
 const REQUEST_TIMEOUT_MS = 30000;
+/** How long the worker gets to stop its runs after SIGTERM before it is killed. */
+const KILL_GRACE_MS = 1500;
 
 /**
  * One worker process for one target. The worker boots the app once; runs are
@@ -165,7 +167,7 @@ export class TinkerSession {
         this.disposed = true;
         this.resetPending(new Error('Session closed'));
         if (this.child?.stdin?.writable) this.write({ type: 'shutdown' });
-        this.kill(1500);
+        this.kill();
         this.events.onStatus('stopped');
     }
 
@@ -336,10 +338,18 @@ export class TinkerSession {
         }
     }
 
-    private kill(graceMs = 0): void {
+    /**
+     * Asks the worker to exit, then forces it. SIGTERM lets it stop its forked
+     * runs first; SIGKILL alone would leave them running as orphans. Docker and
+     * SSH clients exit on SIGTERM, which closes the worker's input, and the
+     * worker cleans up on that too.
+     */
+    private kill(graceMs = KILL_GRACE_MS): void {
         const child = this.child;
-        if (!child || child.exitCode !== null) return;
-        if (graceMs > 0) setTimeout(() => child.kill('SIGKILL'), graceMs).unref?.();
-        else child.kill('SIGKILL');
+        if (!child || child.exitCode !== null || child.signalCode !== null) return;
+        child.kill('SIGTERM');
+        setTimeout(() => {
+            if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+        }, graceMs).unref?.();
     }
 }

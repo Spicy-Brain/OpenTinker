@@ -5,6 +5,7 @@ import * as vscode from 'vscode';
 import { collectSnippetParameters } from './panels/snippetForm';
 import { callableCode, type CallableTarget } from './run/callable';
 import {
+    FakesUnavailableError,
     NoTargetError,
     RunController,
     type FinishedRun,
@@ -35,6 +36,7 @@ import {
     obviousChoice,
     type DetectedTarget,
 } from './targets/detect';
+import { explain } from './targets/explain';
 import {
     isProduction,
     targetDetail,
@@ -70,7 +72,7 @@ const KEYMAP_CONFLICTS: Record<string, string> = {
 export class OpenTinkerApp implements vscode.Disposable {
     readonly output = vscode.window.createOutputChannel('OpenTinker');
     private readonly logOutput = vscode.window.createOutputChannel('OpenTinker: Laravel log');
-    readonly folder = vscode.workspace.workspaceFolders?.[0];
+    readonly folder = projectFolder(vscode.workspace.workspaceFolders ?? []);
     readonly targets: TargetStore;
     readonly store: RunStore;
     readonly scratch?: ScratchManager;
@@ -136,6 +138,9 @@ export class OpenTinkerApp implements vscode.Disposable {
             environment: (target) => this.controller.environment(target),
             sessionMode: () => settings.run().sessionMode,
             rollback: () => settings.run().rollback,
+            fake: () => settings.run().fake,
+            runMethods: () => settings.codeLensRunMethods(),
+            tinkerModel: () => settings.codeLensTinkerModel(),
         });
         this.banner = new ProductionBanner(
             (uri) => this.scratch?.isScratch(uri) ?? false,
@@ -228,6 +233,14 @@ export class OpenTinkerApp implements vscode.Disposable {
                 await this.selectTarget();
                 return undefined;
             }
+            if (error instanceof FakesUnavailableError) {
+                const choice = await vscode.window.showWarningMessage(
+                    error.message,
+                    'Turn off Fake Side Effects',
+                );
+                if (choice) await this.toggleFakes();
+                return undefined;
+            }
             this.showStartError(error);
             return undefined;
         }
@@ -286,17 +299,25 @@ export class OpenTinkerApp implements vscode.Disposable {
     }
 
     /**
-     * The big Run buttons (status bar, editor toolbar, results panel): runs the
-     * active PHP file, or else the scratch file last worked on.
+     * The Run buttons in the status bar and editor toolbar: runs the active PHP
+     * file, or else what the results panel's Run button would.
      */
     async runScratch(): Promise<void> {
         const active = vscode.window.activeTextEditor;
         if (active?.document.languageId === 'php') return this.runEditor(active, 'file');
+        return this.runFromPanel();
+    }
 
-        const displayedKey = this.displayed?.record.key;
-        if (displayedKey && !this.isScratchKey(displayedKey)) return this.rerunDisplayed();
-
-        const uri = displayedKey ? vscode.Uri.parse(displayedKey) : this.lastScratch;
+    /**
+     * The results panel's Run button, matching its tooltip: a run that did not
+     * come from a scratch file runs again; otherwise the scratch file last
+     * worked on runs. It never runs whichever PHP editor happens to be active,
+     * which in the bottom panel layout would be any file.
+     */
+    async runFromPanel(): Promise<void> {
+        const record = this.displayed?.record;
+        if (record?.code && !this.isScratchKey(record.key)) return this.rerunDisplayed();
+        const uri = this.lastScratch ?? (record?.key ? vscode.Uri.parse(record.key) : undefined);
         if (!uri) return this.openTinkerWindow();
         const visible = vscode.window.visibleTextEditors.find(
             (editor) => editor.document.uri.toString() === uri.toString(),
@@ -998,6 +1019,17 @@ export class OpenTinkerApp implements vscode.Disposable {
         );
     }
 
+    async toggleFakes(): Promise<void> {
+        const next = !settings.run().fake;
+        await settings.setFakeSideEffects(next);
+        void vscode.window.setStatusBarMessage(
+            next
+                ? 'OpenTinker: mail, notifications, jobs and HTTP calls will be faked'
+                : 'OpenTinker: side effects will be real',
+            3000,
+        );
+    }
+
     async restartSession(): Promise<void> {
         const target = this.targets.get(this.displayed?.record.targetId) ?? this.currentTarget();
         try {
@@ -1108,6 +1140,7 @@ export class OpenTinkerApp implements vscode.Disposable {
             environment: record.environment,
             sessionMode: record.sessionMode ?? 'keep',
             rollback: record.rollback ?? false,
+            fake: record.fake ?? false,
             at: record.at,
         };
     }
@@ -1121,6 +1154,7 @@ export class OpenTinkerApp implements vscode.Disposable {
             environment: target ? this.controller.environment(target) : 'unknown',
             sessionMode: run.sessionMode,
             rollback: run.rollback,
+            fake: run.fake,
             state: this.controller.state,
             fork: this.controller.info(target)?.capabilities?.fork ?? true,
             hasTarget: !!target,
@@ -1153,10 +1187,8 @@ export class OpenTinkerApp implements vscode.Disposable {
         switch (message.kind) {
             case 'action':
                 switch (message.action) {
-                    case 'rerun':
-                        return this.rerunDisplayed();
                     case 'run':
-                        return this.runScratch();
+                        return this.runFromPanel();
                     case 'stop':
                         return this.controller.stop();
                     case 'restartSession':
@@ -1167,6 +1199,8 @@ export class OpenTinkerApp implements vscode.Disposable {
                         return this.toggleSessionMode();
                     case 'toggleRollback':
                         return this.toggleRollback();
+                    case 'toggleFakes':
+                        return this.toggleFakes();
                     case 'chooseTarget': {
                         const editor = vscode.window.visibleTextEditors.find((item) =>
                             this.scratch?.isScratch(item.document.uri),
@@ -1251,6 +1285,7 @@ export class OpenTinkerApp implements vscode.Disposable {
             state: this.controller.state,
             sessionMode: run.sessionMode,
             rollback: run.rollback,
+            fake: run.fake,
             booting: target ? this.booting.has(target.id) : false,
             scratchName: this.activeScratchName(),
         });
@@ -1297,6 +1332,11 @@ export class OpenTinkerApp implements vscode.Disposable {
         }
         if (event.affectsConfiguration('opentinker.results.location') && this.displayed)
             this.results.show(true);
+        if (event.affectsConfiguration('opentinker.history')) {
+            void this.store
+                .configure(settings.historyLimit(), settings.persistResults())
+                .then(() => this.sidebar.refresh());
+        }
         this.refreshUi();
     }
 
@@ -1337,13 +1377,19 @@ export class OpenTinkerApp implements vscode.Disposable {
         environment: string,
         writes: string[],
     ): Promise<boolean> {
-        const rollback = settings.run().rollback;
+        const { rollback, fake } = settings.run();
+        const safety =
+            rollback && fake
+                ? 'Database changes will be rolled back, and mail, notifications, jobs and Laravel HTTP client calls faked. Files, cache, events and other HTTP clients are real.'
+                : rollback
+                  ? 'Database changes will be rolled back; mail, queues, files and external calls will not.'
+                  : fake
+                    ? 'Mail, notifications, jobs and Laravel HTTP client calls will be faked. Database changes, files, cache and other HTTP clients are real.'
+                    : '';
         const detail = [
             `${target.name} (${targetSummary(target)}) reports APP_ENV=${environment}.`,
             writes.length ? `This code looks like it will ${joinList(writes)}.` : '',
-            rollback
-                ? 'Database changes will be rolled back; mail, queues, files and external calls will not.'
-                : '',
+            safety,
         ]
             .filter(Boolean)
             .join('\n\n');
@@ -1410,6 +1456,23 @@ export class OpenTinkerApp implements vscode.Disposable {
     }
 }
 
+/**
+ * The folder OpenTinker works in. In a multi-root workspace that is the first
+ * Laravel app, else the first Composer project, else the first folder.
+ */
+function projectFolder(
+    folders: readonly vscode.WorkspaceFolder[],
+): vscode.WorkspaceFolder | undefined {
+    const local = folders.filter((folder) => folder.uri.scheme === 'file');
+    const has = (folder: vscode.WorkspaceFolder, file: string): boolean =>
+        existsSync(path.join(folder.uri.fsPath, file));
+    return (
+        local.find((folder) => has(folder, 'artisan')) ??
+        local.find((folder) => has(folder, 'composer.json')) ??
+        folders[0]
+    );
+}
+
 function reveal(editor: vscode.TextEditor, line: number): void {
     const index = Math.min(Math.max(0, line - 1), editor.document.lineCount - 1);
     editor.selection = new vscode.Selection(index, 0, index, 0);
@@ -1428,34 +1491,4 @@ function sameRuntime(a: Target, b: Target): boolean {
 function joinList(items: string[]): string {
     if (items.length < 2) return items.join('');
     return `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`;
-}
-
-/** Turns common start-up failures into a next step. */
-export function explain(error: unknown, target: Target): string {
-    const message = error instanceof Error ? error.message : String(error);
-    const lower = message.toLowerCase();
-    if (
-        target.kind === 'compose' &&
-        (lower.includes('no such service') ||
-            lower.includes('is not running') ||
-            (lower.includes('service') && lower.includes('not running')))
-    ) {
-        return `${message}\nStart it with: docker compose up -d ${target.service}`;
-    }
-    if (lower.includes('cannot connect to the docker daemon') || lower.includes('docker daemon')) {
-        return `${message}\nIs Docker running?`;
-    }
-    if (lower.includes('vendor/autoload.php')) {
-        return `${message}\nCheck the target's project path${target.kind === 'local' ? '' : ` (${target.workingDir})`} and that composer install has run.`;
-    }
-    if (lower.includes('host key verification failed')) {
-        return `${message}\nConnect once with ssh ${target.kind === 'ssh' ? `${target.user}@${target.host}` : ''} in a terminal to trust the host key.`;
-    }
-    if (lower.includes('permission denied (publickey')) {
-        return `${message}\nAdd your key to the SSH agent (ssh-add) or set the key file on the target.`;
-    }
-    if (lower.includes('enoent') && lower.includes('spawn')) {
-        return `${message}\n${target.kind === 'local' ? 'Is PHP installed and on your PATH?' : 'Is the docker/ssh command installed?'}`;
-    }
-    return message;
 }
